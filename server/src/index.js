@@ -88,20 +88,438 @@ const TURBOWARP_EXTENSION_PATH = path.join(PROJECT_ROOT, "web_src", "turbowarp-e
 const CERT_DIR = path.join(PROJECT_ROOT, "Benno111 Chat");
 const CERT_PATH = path.join(CERT_DIR, "cert.pem");
 const KEY_PATH = path.join(CERT_DIR, "key.pem");
+const MINIFY_ID_PATH = path.join(PROJECT_ROOT, "temp-prep.json");
+let minifyIdState = null;
 
-function minifyText(text) {
-  const noBlock = text.replace(/\/\*[\s\S]*?\*\//g, "");
-  const noLine = noBlock.split("\n").map((line) => {
+function loadMinifyIdState() {
+  const fallback = { name: 123456 };
+  try {
+    if (!fs.existsSync(MINIFY_ID_PATH)) {
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback));
+      return fallback;
+    }
+    const raw = fs.readFileSync(MINIFY_ID_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.name !== "number") {
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback));
+      return fallback;
+    }
+    return { name: parsed.name };
+  } catch {
+    return fallback;
+  }
+}
+
+function saveMinifyIdState(state) {
+  try {
+    fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify({ name: state.name }));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function stripLineCommentsPreserveUrls(text) {
+  return text.split("\n").map((line) => {
     const idx = line.indexOf("//");
     if (idx === -1) return line;
-    // Keep URLs like https://
     if (idx > 0 && line[idx - 1] === ":") return line;
     return line.slice(0, idx);
-  }).join(" ");
-  return noLine.replace(/\s+/g, " ").trim();
+  }).join("\n");
+}
+
+function stripJsComments(text) {
+  let out = "";
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  let regexCharClass = false;
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        out += ch;
+        i += 1;
+        continue;
+      }
+      out += ch;
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      if (ch === "\n") {
+        out += "\n";
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      if (ch === "*" && next === "/") {
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === "[") regexCharClass = true;
+      if (ch === "]") regexCharClass = false;
+      if (ch === "/" && !regexCharClass) {
+        state = "normal";
+      }
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function minifyJs(text) {
+  const noComments = stripJsComments(text);
+  return noComments.replace(/\s+/g, " ").trim();
+}
+
+function collectJsDeclaredIdentifiers(text) {
+  const identifiers = new Set();
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+  const isIdent = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  const readIdent = () => {
+    let start = i;
+    i += 1;
+    while (i < text.length && isIdent(text[i])) i += 1;
+    return text.slice(start, i);
+  };
+
+  const skipSpace = () => {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+  };
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        i += 1;
+        continue;
+      }
+
+      if (isIdentStart(ch)) {
+        const word = readIdent();
+        if (word === "var" || word === "let" || word === "const") {
+          skipSpace();
+          while (i < text.length) {
+            if (text[i] === ";" || text[i] === "\n") break;
+            if (isIdentStart(text[i])) {
+              const name = readIdent();
+              identifiers.add(name);
+              skipSpace();
+              if (text[i] === "=") {
+                i += 1;
+                continue;
+              }
+              if (text[i] === ",") {
+                i += 1;
+                skipSpace();
+                continue;
+              }
+            } else {
+              i += 1;
+            }
+          }
+        }
+        if (word.length) prevNonSpace = word[word.length - 1];
+        continue;
+      }
+
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      if (ch === "\n") {
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      if (ch === "*" && next === "/") {
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "/") state = "normal";
+      i += 1;
+    }
+  }
+
+  return identifiers;
+}
+
+function renameJsIdentifiers(text, renameMap) {
+  let out = "";
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  let regexCharClass = false;
+  const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+  const isIdent = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        out += ch;
+        i += 1;
+        continue;
+      }
+
+      if (isIdentStart(ch)) {
+        let start = i;
+        i += 1;
+        while (i < text.length && isIdent(text[i])) i += 1;
+        const word = text.slice(start, i);
+        out += renameMap[word] || word;
+        prevNonSpace = word[word.length - 1];
+        continue;
+      }
+
+      out += ch;
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      out += ch;
+      if (ch === "\n") {
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      out += ch;
+      if (ch === "*" && next === "/") {
+        out += next;
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === "[") regexCharClass = true;
+      if (ch === "]") regexCharClass = false;
+      if (ch === "/" && !regexCharClass) {
+        state = "normal";
+      }
+      i += 1;
+    }
+  }
+
+  return out;
+}
+
+function obfuscateInlineJs(text, idState) {
+  const declared = collectJsDeclaredIdentifiers(text);
+  const renameMap = {};
+  for (const name of declared) {
+    if (!renameMap[name]) {
+      renameMap[name] = `var${idState.name}`;
+      idState.name += 1;
+    }
+  }
+  if (!Object.keys(renameMap).length) return text;
+  return renameJsIdentifiers(text, renameMap);
+}
+
+function minifyCss(text) {
+  const noComments = stripLineCommentsPreserveUrls(
+    text.replace(/\/\*[\s\S]*?\*\//g, "")
+  );
+  return noComments
+    .replace(/\s+/g, " ")
+    .replace(/\s*([{}:;,>+~])\s*/g, "$1")
+    .replace(/;}/g, "}")
+    .trim();
+}
+
+function minifyHtml(text, idState) {
+  let html = text.replace(/<!--[\s\S]*?-->/g, "");
+
+  html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
+    const obfuscated = idState ? obfuscateInlineJs(body, idState) : body;
+    const min = minifyJs(obfuscated);
+    return `<script${attrs}>${min}</script>`;
+  });
+
+  html = html.replace(/<style\b([^>]*)>([\s\S]*?)<\/style>/gi, (match, attrs, body) => {
+    const min = minifyCss(body);
+    return `<style${attrs}>${min}</style>`;
+  });
+
+  const noComments = stripLineCommentsPreserveUrls(html);
+  return noComments
+    .replace(/\s+/g, " ")
+    .replace(/>\s+</g, "><")
+    .replace(/\s*=\s*/g, "=")
+    .trim();
+}
+
+function minifyText(text, ext) {
+  if (ext === ".js") return minifyJs(text);
+  if (ext === ".css") return minifyCss(text);
+  if (ext === ".html") return minifyHtml(text, minifyIdState);
+  return text;
 }
 
 function minifyWebAssets(sourceDir, targetDir) {
+  minifyIdState = loadMinifyIdState();
   if (!fs.existsSync(sourceDir)) {
     console.log(`[Minify] source missing: ${sourceDir}`);
     return;
@@ -128,7 +546,7 @@ function minifyWebAssets(sourceDir, targetDir) {
       const shouldBypassMinify = relPath.startsWith("js/pentapod/") || relPath.startsWith("ide/ui/");
       if ((ext === ".html" || ext === ".css" || ext === ".js") && !shouldBypassMinify) {
         const raw = fs.readFileSync(srcPath, "utf8");
-        const min = minifyText(raw);
+        const min = minifyText(raw, ext);
         fs.writeFileSync(dstPath, min + "\n");
       } else {
         fs.copyFileSync(srcPath, dstPath);
@@ -140,6 +558,7 @@ function minifyWebAssets(sourceDir, targetDir) {
     }
   }
   console.log(`[Minify] done. processed ${fileCount} files.`);
+  saveMinifyIdState(minifyIdState);
 }
 
 function readCookie(req, name) {
