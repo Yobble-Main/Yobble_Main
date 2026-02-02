@@ -90,18 +90,22 @@ const CERT_PATH = path.join(CERT_DIR, "cert.pem");
 const KEY_PATH = path.join(CERT_DIR, "key.pem");
 const MINIFY_ID_PATH = path.join(PROJECT_ROOT, "temp-prep.json");
 let minifyIdState = null;
+const VARENV_ENABLED = ["1", "true", "yes", "on"].includes(
+  String(process.env.varenv || "false").toLowerCase()
+);
 
 function loadMinifyIdState() {
   const fallback = { name: 123456 };
   try {
     if (!fs.existsSync(MINIFY_ID_PATH)) {
-      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback));
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback, null, 2));
       return fallback;
     }
     const raw = fs.readFileSync(MINIFY_ID_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.name !== "number") {
-      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback));
+      const merged = { ...(parsed && typeof parsed === "object" ? parsed : {}), ...fallback };
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(merged, null, 2));
       return fallback;
     }
     return { name: parsed.name };
@@ -112,7 +116,16 @@ function loadMinifyIdState() {
 
 function saveMinifyIdState(state) {
   try {
-    fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify({ name: state.name }));
+    let existing = {};
+    try {
+      if (fs.existsSync(MINIFY_ID_PATH)) {
+        existing = JSON.parse(fs.readFileSync(MINIFY_ID_PATH, "utf8")) || {};
+      }
+    } catch {
+      existing = {};
+    }
+    const merged = { ...(existing && typeof existing === "object" ? existing : {}), name: state.name };
+    fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(merged, null, 2));
   } catch {
     // Best-effort only.
   }
@@ -493,7 +506,7 @@ function minifyHtml(text, idState) {
   let html = text.replace(/<!--[\s\S]*?-->/g, "");
 
   html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
-    const obfuscated = idState ? obfuscateInlineJs(body, idState) : body;
+    const obfuscated = idState && VARENV_ENABLED ? obfuscateInlineJs(body, idState) : body;
     const min = minifyJs(obfuscated);
     return `<script${attrs}>${min}</script>`;
   });
