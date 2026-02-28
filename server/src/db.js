@@ -1,10 +1,10 @@
-import sqlite3 from "sqlite3";
+import { openDatabase } from "./sqlite-compat.js";
 import crypto from "crypto";
 
 /* -----------------------------
    DB connection
 ------------------------------ */
-export const db = new sqlite3.Database("../save/db");
+export const db = openDatabase("../save/db");
 
 /* IMPORTANT: enable foreign keys */
 db.serialize(() => {

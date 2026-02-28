@@ -5,8 +5,8 @@ import path from "path";
 import fs from "fs";
 import http from "http";
 import https from "https";
-import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
+import { openDatabase } from "./sqlite-compat.js";
 
 import { initDb, get, run, all } from "./db.js";
 import { requireAuth, verifyToken } from "./auth.js";
@@ -1110,7 +1110,7 @@ async function deleteCustomLevelsForUser(userId) {
   const files = fs.readdirSync(levelsDir).filter((name) => name.endsWith(".sqlite"));
   for (const file of files) {
     const dbPath = path.join(levelsDir, file);
-    const db = new sqlite3.Database(dbPath);
+    const db = openDatabase(dbPath);
     await new Promise((resolve) => {
       db.run("DELETE FROM levels WHERE uploader_user_id=?", [userId], () => {
         db.close(() => resolve());

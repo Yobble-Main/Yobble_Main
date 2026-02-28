@@ -1,1 +1,1 @@
-node/tools/update-deps.js
+node tools/update-deps.js

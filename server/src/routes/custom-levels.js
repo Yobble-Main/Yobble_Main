@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import sqlite3 from "sqlite3";
+import { openDatabase } from "../sqlite-compat.js";
 import { requireAuth, optionalAuth } from "../auth.js";
 import { get, run } from "../db.js";
 
@@ -21,7 +21,7 @@ function getLevelDb(project) {
   const safeproject = String(project || "").replace(/[^a-z0-9-_]+/gi, "");
   const dbPath = path.join(LEVEL_DB_DIR, `${safeproject}.sqlite`);
   if (dbCache.has(dbPath)) return dbCache.get(dbPath);
-  const db = new sqlite3.Database(dbPath);
+  const db = openDatabase(dbPath);
   dbCache.set(dbPath, db);
   return db;
 }
