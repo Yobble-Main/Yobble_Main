@@ -43,5 +43,7 @@ export async function logout(){
     await api.post("/api/auth/logout", {});
   }catch{}
   localStorage.removeItem("token");
+  localStorage.removeItem("username");
+  localStorage.removeItem("role");
   location.href = "/login";
 }

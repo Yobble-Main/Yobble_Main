@@ -1,21 +1,94 @@
-import { getCurrentUser } from "./auth-client.js";
+const HEADER_HTML = `
+<header>
+  <img src="/assets/logo.svg" alt="Yobble" style="width:28px;height:28px">
+  <nav id="Nav">
+    <a href="/index" data-page="ugames">Yobble</a>
+  </nav>
+  <button id="navToggle" class="iconBtn navToggle" aria-expanded="false" aria-controls="mainNav" aria-label="Toggle navigation">
+    <span class="navToggleBar"></span>
+    <span class="navToggleBar"></span>
+    <span class="navToggleBar"></span>
+  </button>
+  <nav id="mainNav">
+    <div class="navDropdown">
+      <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <span class="navIcon" aria-hidden="true">🎮</span>
+        <span class="navLabel navLabel-full">Play</span>
+        <span class="navLabel navLabel-abbr">Play</span>
+        <span class="navLabel navLabel-emoji">🎮</span>
+        <span class="navDropdownArrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="navDropdownMenu" role="menu">
+        <a href="/games" data-page="ugames" role="menuitem">Games</a>
+        <a href="/library" data-page="ulibrary" role="menuitem">Library</a>
+      </div>
+    </div>
+    <div class="navDropdown">
+      <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <span class="navIcon" aria-hidden="true">💬</span>
+        <span class="navLabel navLabel-full">Social</span>
+        <span class="navLabel navLabel-abbr">Social</span>
+        <span class="navLabel navLabel-emoji">💬</span>
+        <span class="navDropdownArrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="navDropdownMenu" role="menu">
+        <a href="/friends" data-page="ufriends" role="menuitem">Friends</a>
+        <a href="/chat/" data-page="uchat" role="menuitem">Chat</a>
+        <a href="/profile" data-page="uprofile" role="menuitem">Profile</a>
+      </div>
+    </div>
+    <div class="navDropdown">
+      <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <span class="navIcon" aria-hidden="true">🛒</span>
+        <span class="navLabel navLabel-full">Economy</span>
+        <span class="navLabel navLabel-abbr">Eco</span>
+        <span class="navLabel navLabel-emoji">🛒</span>
+        <span class="navDropdownArrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="navDropdownMenu" role="menu">
+        <a href="/market" data-page="umarket" role="menuitem">Marketplace</a>
+        <a href="/inventory" data-page="uinventory" role="menuitem">Inventory</a>
+        <a href="/money" role="menuitem">Get Balance</a>
+      </div>
+    </div>
+    <div class="navDropdown">
+      <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <span class="navIcon" aria-hidden="true">⤴️</span>
+        <span class="navLabel navLabel-full">Create</span>
+        <span class="navLabel navLabel-abbr">Create</span>
+        <span class="navLabel navLabel-emoji">⤴️</span>
+        <span class="navDropdownArrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="navDropdownMenu" role="menu">
+        <a href="/upload" data-page="uupload" role="menuitem">Upload</a>
+        <a href="/item-upload" data-page="uitemupload" role="menuitem">Item upload</a>
+        <a href="/download" id="Download" role="menuitem">Download</a>
+      </div>
+    </div>
+    <span id="adminLinks" hidden>
+      <a href="/modqueue"><span class="navIcon" aria-hidden="true">🛡️</span><span class="navLabel navLabel-full">Moderation</span><span class="navLabel navLabel-abbr">M</span><span class="navLabel navLabel-emoji">🛡️</span></a>
+    </span>
+  </nav>
+  <div class="header-right" id="headerRight">
+    <div class="navDropdown userDropdown">
+      <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <span id="headerUsername">Account</span>
+        <span class="navDropdownArrow" aria-hidden="true">▾</span>
+      </button>
+      <div class="navDropdownMenu" role="menu">
+        <a href="/profile" role="menuitem">Profile</a>
+        <a href="/User-Settings" role="menuitem">User settings</a>
+        <a href="#" id="logoutBtn" role="menuitem">Logout</a>
+      </div>
+    </div>
+  </div>
+</header>
+`;
 export async function mountTopbar(page){
   const token = localStorage.getItem("token");
-  const headerPromise = fetch("/partials/header").then(r => r.text());
-  const userPromise = getCurrentUser();
-  const walletPromise = token
-    ? fetch("/api/wallet", {
-        headers: { Authorization: "Bearer " + token }
-      })
-        .then(r => (r.ok ? r.json() : null))
-        .catch(() => null)
-    : Promise.resolve(null);
-  const [headerHtml, user, walletData] = await Promise.all([
-    headerPromise,
-    userPromise,
-    walletPromise
-  ]);
-  document.body.insertAdjacentHTML("afterbegin", headerHtml);
+  const username = localStorage.getItem("username");
+  const role = localStorage.getItem("role");
+  document.body.insertAdjacentHTML("afterbegin", HEADER_HTML);
   const navToggle = document.getElementById("navToggle");
   if (navToggle) {
     navToggle.addEventListener("click", () => {
@@ -23,13 +96,13 @@ export async function mountTopbar(page){
       navToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
     });
   }
-  if(user && (user.role==="admin"||user.role==="moderator")){
+  if(role === "admin" || role === "moderator"){
     const el=document.getElementById("adminLinks"); if(el) el.hidden=false;
   }
   const headerRight = document.getElementById("headerRight");
   const headerUsername = document.getElementById("headerUsername");
-  if (user && headerUsername) {
-    headerUsername.textContent = user.username || "Account";
+  if (token && headerUsername) {
+    headerUsername.textContent = username || "Account";
   } else if (headerRight) {
     headerRight.remove();
   }
@@ -66,6 +139,7 @@ export async function mountTopbar(page){
       event.preventDefault();
       localStorage.removeItem("token");
       localStorage.removeItem("username");
+      localStorage.removeItem("role");
       location.href = "/login";
     });
   }
@@ -74,14 +148,7 @@ export async function mountTopbar(page){
     if (uploadLink) uploadLink.style.display = "none";
   }
   const balanceEl = document.getElementById("walletBalance");
-  if (token && balanceEl) {
-    if (walletData) {
-      const balance = Number(walletData?.balance ?? 0);
-      balanceEl.textContent = `Yobble Dollar ${Number.isFinite(balance) ? balance : 0}`;
-    } else {
-      balanceEl.textContent = "Yobble Dollar —";
-    }
-  } else if (balanceEl) {
+  if (balanceEl) {
     balanceEl.remove();
   }
 }

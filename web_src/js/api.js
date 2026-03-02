@@ -29,6 +29,12 @@ export async function api(url, opts = {}){
   if (data?.token) {
     localStorage.setItem("token", data.token);
   }
+  if (data?.user?.username) {
+    localStorage.setItem("username", data.user.username);
+  }
+  if (data?.user?.role) {
+    localStorage.setItem("role", data.user.role);
+  }
   if (!res.ok) {
     const msg = typeof data === "string" ? data : (data?.error || res.statusText);
     const err = new Error(msg || "Request failed");
