@@ -52,14 +52,33 @@ function downloadZip(url, destPath) {
   });
 }
 
+function resolvePathWithin(baseDir, unsafePath = "") {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(resolvedBase, "." + path.sep + unsafePath);
+  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    return null;
+  }
+  return resolvedTarget;
+}
+
 async function extractZip(zipPath, extractDir) {
   await fs.mkdir(extractDir, { recursive: true });
-  await new Promise((resolve, reject) => {
-    fsSync.createReadStream(zipPath)
-      .pipe(unzipper.Extract({ path: extractDir }))
-      .on("close", resolve)
-      .on("error", reject);
-  });
+  const archive = await unzipper.Open.file(zipPath);
+  for (const entry of archive.files) {
+    const entryPath = String(entry.path || "").replace(/\\/g, "/");
+    if (!entryPath || entry.type === "Directory" || entryPath.endsWith("/")) continue;
+    const outputPath = resolvePathWithin(extractDir, entryPath);
+    if (!outputPath) {
+      throw new Error("unsafe_zip_entry");
+    }
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await new Promise((resolve, reject) => {
+      entry.stream()
+        .pipe(fsSync.createWriteStream(outputPath, { flags: "wx" }))
+        .on("finish", resolve)
+        .on("error", reject);
+    });
+  }
   const entries = await fs.readdir(extractDir, { withFileTypes: true });
   const rootDir = entries.find((entry) => entry.isDirectory());
   if (!rootDir) {

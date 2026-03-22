@@ -201,6 +201,15 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function resolvePathWithin(baseDir, unsafePath = "") {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(resolvedBase, "." + path.sep + unsafePath);
+  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    return null;
+  }
+  return resolvedTarget;
+}
+
 function createInviteToken() {
   return crypto.randomBytes(18).toString("hex");
 }
@@ -489,7 +498,8 @@ export function createChatRouter({ projectRoot }) {
         [id]
       );
       if (!row) return res.status(404).json({ error: "not_found" });
-      const filePath = path.join(uploadDir, row.stored_name);
+      const filePath = resolvePathWithin(uploadDir, path.basename(row.stored_name || ""));
+      if (!filePath) return res.status(404).json({ error: "not_found" });
       return res.download(filePath, row.original_name);
     } catch (err) {
       console.error("chat download error", err);
@@ -508,8 +518,8 @@ export function createChatRouter({ projectRoot }) {
 
 function expressStatic(dir) {
   return function (req, res, next) {
-    const filePath = path.join(dir, decodeURIComponent(req.path || ""));
-    if (!filePath.startsWith(dir)) return res.status(403).send("forbidden");
+    const filePath = resolvePathWithin(dir, decodeURIComponent(req.path || ""));
+    if (!filePath) return res.status(403).send("forbidden");
     fs.stat(filePath, (err, stat) => {
       if (err || !stat.isFile()) return next();
       res.sendFile(filePath);

@@ -1,7 +1,13 @@
 import jwt from "jsonwebtoken";
 import { get, run } from "./db.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
+function loadJwtSecret() {
+  const configured = String(process.env.JWT_SECRET || "").trim();
+  if (configured) return configured;
+  throw new Error("JWT_SECRET environment variable is required");
+}
+
+const JWT_SECRET = loadJwtSecret();
 const TOKEN_TTL = "7d";
 const ROLE_ORDER = { user: 0, moderator: 1, admin: 2 };
 
