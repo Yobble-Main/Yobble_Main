@@ -39,6 +39,17 @@ const badWordPattern = new RegExp(
   `\\b(${BAD_WORDS.map(escapeRegExp).join("|")})\\b`,
   "gi"
 );
+const chatBroadcasters = new Set();
+
+function broadcastChatMessage(channelId, message) {
+  for (const broadcast of chatBroadcasters) {
+    try {
+      broadcast(channelId, message);
+    } catch (err) {
+      console.error("chat broadcast error", err);
+    }
+  }
+}
 
 function censorText(value) {
   if (!value) return "";
@@ -301,6 +312,7 @@ export function createChatRouter({ projectRoot }) {
   router.get("/invites/:token", requireAuth, async (req, res) => {
     const { username } = req.user;
     const token = String(req.params.token || "").trim();
+    const previewOnly = ["1", "true", "yes"].includes(String(req.query.preview || "").toLowerCase());
     if (!token) return res.status(400).json({ error: "missing_token" });
 
     const row = await get(
@@ -317,9 +329,12 @@ export function createChatRouter({ projectRoot }) {
     if (!channelRow || channelRow.is_dm) {
       return res.status(404).json({ error: "not_found" });
     }
-    await ensureChannelMember(channelRow.channel_uuid, username, Date.now());
+    if (!previewOnly) {
+      await ensureChannelMember(channelRow.channel_uuid, username, Date.now());
+    }
 
     res.json({
+      preview: previewOnly,
       channel: { id: channelRow.channel_uuid, name: channelRow.name }
     });
   });
@@ -471,18 +486,18 @@ export function createChatRouter({ projectRoot }) {
           isVideo: mime.startsWith("video/")
         });
       }
-      return res.json({
-        message: {
-          id: messageId,
-          user: username,
-          text,
-          ts,
-          deleted: 0,
-          channel: channelName,
-          channelId: channelRow.channel_uuid,
-          attachments
-        }
-      });
+      const message = {
+        id: messageId,
+        user: username,
+        text,
+        ts,
+        deleted: 0,
+        channel: channelName,
+        channelId: channelRow.channel_uuid,
+        attachments
+      };
+      broadcastChatMessage(channelRow.channel_uuid, { type: "chat", ...message });
+      return res.json({ message });
     } catch (err) {
       console.error("chat send error", err);
       return res.status(500).json({ error: "server_error" });
@@ -551,6 +566,10 @@ export function attachChatWs(server, { projectRoot }) {
       }
     });
   }
+  chatBroadcasters.add(broadcastToChannel);
+  wss.on("close", () => {
+    chatBroadcasters.delete(broadcastToChannel);
+  });
 
   wss.on("connection", async (ws, req) => {
     const url = new URL(req.url || "", "http://localhost");

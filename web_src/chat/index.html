@@ -160,6 +160,114 @@ function censorText(value) {
   return String(value).replace(badWordPattern, (match) => "*".repeat(match.length));
 }
 
+function findInviteLink(text) {
+  const value = String(text || "");
+  const matches = value.match(/(?:https?:\/\/[^\s]+|\/chat\/index\?invite=[^\s]+)/g) || [];
+  for (const match of matches) {
+    try {
+      const url = new URL(match, location.origin);
+      if (url.origin === location.origin && url.pathname === "/chat/index" && url.searchParams.has("invite")) {
+        return {
+          token: url.searchParams.get("invite"),
+          url: url.toString()
+        };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function joinInvite(tokenValue) {
+  const tokenToJoin = String(tokenValue || "").trim();
+  if (!tokenToJoin) return;
+  channelMeta.textContent = "Joining invite...";
+  try {
+    const res = await fetch(`/api/chat/invites/${encodeURIComponent(tokenToJoin)}`, { headers: authHeaders() });
+    if (!res.ok) {
+      channelMeta.textContent = res.status === 410 ? "Invite expired." : "Invite unavailable.";
+      return;
+    }
+    const data = await res.json();
+    if (data?.channel?.id) {
+      currentChannelId = data.channel.id;
+      currentChannelName = data.channel.name;
+      await fetchRooms({ shouldSwitch: false });
+      switchChannel(data.channel.id);
+      channelMeta.textContent = "Joined invite.";
+    }
+  } catch {
+    channelMeta.textContent = "Invite unavailable.";
+  }
+}
+
+async function loadInvitePreview(invite, titleEl, metaEl) {
+  try {
+    const res = await fetch(`/api/chat/invites/${encodeURIComponent(invite.token)}?preview=1`, { headers: authHeaders() });
+    if (!res.ok) {
+      metaEl.textContent = res.status === 410 ? "This invite has expired." : "This invite is unavailable.";
+      return;
+    }
+    const data = await res.json();
+    if (data?.channel?.name) {
+      titleEl.textContent = "Invite to #" + data.channel.name;
+      metaEl.textContent = "Join #" + data.channel.name + " from this invite link.";
+    }
+  } catch {
+    metaEl.textContent = "This invite is unavailable.";
+  }
+}
+
+function createInviteCard(invite) {
+  const card = document.createElement("div");
+  card.className = "chat-invite-card";
+
+  const text = document.createElement("div");
+  text.className = "chat-invite-card__text";
+
+  const title = document.createElement("div");
+  title.className = "chat-invite-card__title";
+  title.textContent = "Room invite";
+
+  const meta = document.createElement("div");
+  meta.className = "chat-invite-card__meta";
+  meta.textContent = "Join this chat room from the invite link.";
+
+  text.appendChild(title);
+  text.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "chat-invite-card__actions";
+
+  const joinBtn = document.createElement("button");
+  joinBtn.type = "button";
+  joinBtn.className = "chat-invite-card__btn chat-invite-card__btn--primary";
+  joinBtn.textContent = "Join";
+  joinBtn.addEventListener("click", function () {
+    joinInvite(invite.token);
+  });
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "chat-invite-card__btn";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async function () {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(invite.url);
+      copyBtn.textContent = "Copied";
+      setTimeout(function () { copyBtn.textContent = "Copy"; }, 1200);
+    } else {
+      window.prompt("Copy invite link:", invite.url);
+    }
+  });
+
+  actions.appendChild(joinBtn);
+  actions.appendChild(copyBtn);
+  card.appendChild(text);
+  card.appendChild(actions);
+  loadInvitePreview(invite, title, meta);
+  return card;
+}
+
 async function fetchRooms(options) {
   const opts = options || {};
   const shouldSwitch = opts.shouldSwitch !== false;
@@ -330,6 +438,11 @@ function createMessageElement(msg) {
 
   row.appendChild(header);
   row.appendChild(body);
+
+  const invite = findInviteLink(msg.text);
+  if (invite) {
+    row.appendChild(createInviteCard(invite));
+  }
 
   if (Array.isArray(msg.attachments) && msg.attachments.length) {
     const list = document.createElement("div");
