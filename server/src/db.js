@@ -163,6 +163,39 @@ export async function initDb() {
   await addColumnIfMissing("users", "deleted_at", "INTEGER");
   await addColumnIfMissing("users", "deleted_reason", "TEXT");
 
+  /* BANS */
+  await run(`CREATE TABLE IF NOT EXISTS bans(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    lifted_at INTEGER,
+    lift_reason TEXT
+  )`);
+  await addColumnIfMissing("bans", "expires_at", "INTEGER");
+  await addColumnIfMissing("bans", "lifted_at", "INTEGER");
+  await addColumnIfMissing("bans", "lift_reason", "TEXT");
+
+  await run(`CREATE TABLE IF NOT EXISTS ban_appeals(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ban_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    message TEXT,
+    created_at INTEGER NOT NULL,
+    decided_by INTEGER,
+    decided_at INTEGER,
+    decision_note TEXT,
+    FOREIGN KEY(ban_id) REFERENCES bans(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(decided_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("ban_appeals", "decided_by", "INTEGER");
+  await addColumnIfMissing("ban_appeals", "decided_at", "INTEGER");
+  await addColumnIfMissing("ban_appeals", "decision_note", "TEXT");
+
   /* GIFT CODES */
   await run(`CREATE TABLE IF NOT EXISTS gift_codes(
     code TEXT PRIMARY KEY,

@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 import { openDatabase } from "./sqlite-compat.js";
 
 import { initDb, get, run, all } from "./db.js";
-import { requireAuth, verifyToken } from "./auth.js";
+import { getUserAuthState, requireAuth, verifyToken } from "./auth.js";
 
 // ⭐ Single import for all routers
 import {
@@ -663,61 +663,19 @@ app.use(async (req, res, next) => {
   try {
     const decoded = verifyToken(token);
     const u = await get(
-      `SELECT id, is_banned, ban_reason, banned_at, timeout_until, timeout_reason
+      `SELECT id, username, role, is_banned, ban_reason, banned_at, timeout_until, timeout_reason,
+              delete_at, deleted_at
        FROM users WHERE id=?`,
       [decoded.uid]
     );
     if (!u) return next();
 
-    const now = Date.now();
-    const permaBan = await get(
-      `SELECT reason, created_at
-       FROM bans
-       WHERE target_type='user' AND target_id=?
-         AND lifted_at IS NULL
-         AND expires_at IS NULL
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [u.id]
-    );
-    let activeTempBan = null;
-    if (!permaBan) {
-      activeTempBan = await get(
-        `SELECT id, reason, created_at, expires_at
-         FROM bans
-         WHERE target_type='user' AND target_id=?
-           AND lifted_at IS NULL
-           AND expires_at IS NOT NULL
-           AND expires_at > ?
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [u.id, now]
-      );
-      if (!activeTempBan && u.is_banned) {
-        await run(
-          `UPDATE users
-           SET is_banned=0, ban_reason=NULL, banned_at=NULL
-           WHERE id=?`,
-          [u.id]
-        );
-        u.is_banned = 0;
-        u.ban_reason = null;
-        u.banned_at = null;
-      }
-    }
-
-    if (permaBan || (u.is_banned && activeTempBan)) {
+    const banState = await getUserAuthState(u);
+    if (banState.permaBan || (u.is_banned && banState.activeTempBan)) {
       return res.redirect("/Permanetly-Banned");
     }
-    if (activeTempBan || (u.timeout_until && u.timeout_until > now)) {
-      if (activeTempBan) {
-        const appeal = await get(
-          `SELECT id FROM ban_appeals WHERE ban_id=? AND status='open'`,
-          [activeTempBan.id]
-        );
-        if (appeal) return next();
-      }
-      const until = activeTempBan?.expires_at || u.timeout_until;
+    if ((banState.activeTempBan && !banState.hasOpenAppeal) || (u.timeout_until && u.timeout_until > banState.now)) {
+      const until = banState.activeTempBan?.expires_at || u.timeout_until;
       const qs = until ? `?until=${encodeURIComponent(until)}` : "";
       return res.redirect(`/temporay-banned${qs}`);
     }
