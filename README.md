@@ -39,7 +39,7 @@ Environment variables used by the server:
 - `PORT` primary HTTP port (default: `5050`)
 - `PORT2` secondary HTTP port (default: `3000`)
 - `HTTPS_PORT` HTTPS port (default: `5443`)
-- `JWT_SECRET` required secret used to sign and verify auth tokens
+- `JWT_SECRET` secret used to sign and verify auth tokens; a local development fallback is used if unset
 
 ## AppImage build (Linux)
 The AppImage build pulls from `Client_linux/` and produces `dist/Yobble.appimage`.

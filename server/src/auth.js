@@ -4,7 +4,11 @@ import { get, run } from "./db.js";
 function loadJwtSecret() {
   const configured = String(process.env.JWT_SECRET || "").trim();
   if (configured) return configured;
-  throw new Error("JWT_SECRET environment variable is required");
+
+  const fallback = "yobble-local-development-jwt-secret";
+  process.env.JWT_SECRET = fallback;
+  console.warn("[auth] JWT_SECRET was not set; using local development fallback.");
+  return fallback;
 }
 
 const JWT_SECRET = loadJwtSecret();
