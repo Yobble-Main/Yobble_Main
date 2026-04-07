@@ -10,6 +10,7 @@ import { openDatabase } from "./sqlite-compat.js";
 
 import { initDb, get, run, all } from "./db.js";
 import { getUserAuthState, requireAuth, verifyToken } from "./auth.js";
+import { ensureTosFile } from "./tos.js";
 
 // ⭐ Single import for all routers
 import {
@@ -1033,11 +1034,15 @@ app.use("/games", express.static(GAME_STORAGE_DIR, {
 
 app.use("/save/item_icons", express.static(ITEM_ICON_DIR));
 
-app.get("/tos.json", (req, res) => {
+app.get("/tos.json", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.sendFile(TOS_PATH, err => {
-    if (err && !res.headersSent) res.sendStatus(404);
-  });
+  try {
+    const tos = await ensureTosFile(TOS_PATH);
+    res.json(tos);
+  } catch (err) {
+    console.error("tos generate error", err);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 /* -----------------------------

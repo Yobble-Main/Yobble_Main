@@ -327,7 +327,7 @@ export function createChatRouter({ projectRoot }) {
 
     const channelRow = await getChannelById(row.channel_uuid);
     if (!channelRow || channelRow.is_dm) {
-      return res.status(404).json({ error: "not_found" });
+      return res.status(410).json({ error: "room_unavailable" });
     }
     if (!previewOnly) {
       await ensureChannelMember(channelRow.channel_uuid, username, Date.now());
@@ -500,6 +500,33 @@ export function createChatRouter({ projectRoot }) {
       return res.json({ message });
     } catch (err) {
       console.error("chat send error", err);
+      return res.status(500).json({ error: "server_error" });
+    }
+  });
+
+  router.post("/messages/:id/delete", requireAuth, async (req, res) => {
+    const { username } = req.user;
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: "bad_request" });
+
+    try {
+      const message = await get(
+        "SELECT id, user, channel_uuid, deleted FROM chat_messages WHERE id=?",
+        [id]
+      );
+      if (!message) return res.status(404).json({ error: "not_found" });
+      if (message.user !== username) return res.status(403).json({ error: "not_allowed" });
+      if (!message.deleted) {
+        await run("UPDATE chat_messages SET deleted=1 WHERE id=? AND user=?", [id, username]);
+      }
+      broadcastChatMessage(message.channel_uuid, {
+        type: "message_deleted",
+        id,
+        channelId: message.channel_uuid
+      });
+      return res.json({ ok: true, id });
+    } catch (err) {
+      console.error("chat delete message error", err);
       return res.status(500).json({ error: "server_error" });
     }
   });

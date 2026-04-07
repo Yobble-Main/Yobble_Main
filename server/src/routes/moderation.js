@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import unzipper from "unzipper";
 import { requireAuth, requireRole } from "../auth.js";
 import { all, get, run } from "../db.js";
+import { ensureTosFile } from "../tos.js";
 
 export const moderationRouter = express.Router();
 
@@ -359,11 +360,10 @@ moderationRouter.post("/games/reject-ban", requireAuth, requireRole(...MOD_ROLES
 /* GET /api/mod/tos */
 moderationRouter.get("/tos", requireAuth, requireRole(...MOD_ROLES), async (_req, res) => {
   try{
-    const raw = await fs.readFile(TOS_PATH, "utf8");
-    const json = JSON.parse(raw);
-    res.json(json);
-  }catch{
-    res.json({});
+    res.json(await ensureTosFile(TOS_PATH));
+  }catch(err){
+    console.error("mod tos load error", err);
+    res.status(500).json({ error: "server_error" });
   }
 });
 
@@ -374,6 +374,7 @@ moderationRouter.put("/tos", requireAuth, requireRole(...MOD_ROLES), async (req,
   if (serialized.length > 200000) {
     return res.status(413).json({ error: "too_large" });
   }
+  await fs.mkdir(path.dirname(TOS_PATH), { recursive: true });
   await fs.writeFile(TOS_PATH, serialized + "\n", "utf8");
   res.json({ ok: true });
 });
