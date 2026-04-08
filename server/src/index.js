@@ -6,6 +6,10 @@ import fs from "fs";
 import http from "http";
 import https from "https";
 import { fileURLToPath } from "url";
+import { minify as terserMinify } from "terser";
+import CleanCSS from "clean-css";
+import { minify as htmlMinify } from "html-minifier-terser";
+import JavaScriptObfuscator from "javascript-obfuscator";
 import { openDatabase } from "./sqlite-compat.js";
 
 import { initDb, get, run, all } from "./db.js";
@@ -37,7 +41,8 @@ import {
   customLevelsRouter,
   createChatRouter,
   gameEditorRouter,
-  changelogRouter
+  changelogRouter,
+  roadmapRouter
 } from "./routes/_routers.js";
 import { attachChatWs } from "./routes/chat.js";
 
@@ -65,7 +70,8 @@ const routerImports = [
   ["customLevelsRouter", customLevelsRouter],
   ["createChatRouter", createChatRouter],
   ["gameEditorRouter", gameEditorRouter],
-  ["changelogRouter", changelogRouter]
+  ["changelogRouter", changelogRouter],
+  ["roadmapRouter", roadmapRouter]
 ];
 console.log("[Routers]", routerImports.map(([name, ref]) => `${name}:${ref ? "ok" : "missing"}`).join(" | "));
 
@@ -236,7 +242,7 @@ function stripJsComments(text) {
   return out;
 }
 
-function minifyJs(text) {
+function minifyJsFallback(text) {
   const noComments = stripJsComments(text);
   return noComments.replace(/\s+/g, " ").trim();
 }
@@ -492,7 +498,7 @@ function obfuscateInlineJs(text, idState) {
   return renameJsIdentifiers(text, renameMap);
 }
 
-function minifyCss(text) {
+function minifyCssFallback(text) {
   const noComments = stripLineCommentsPreserveUrls(
     text.replace(/\/\*[\s\S]*?\*\//g, "")
   );
@@ -503,17 +509,17 @@ function minifyCss(text) {
     .trim();
 }
 
-function minifyHtml(text, idState) {
+function minifyHtmlFallback(text, idState) {
   let html = text.replace(/<!--[\s\S]*?-->/g, "");
 
   html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
     const obfuscated = idState && VARENV_ENABLED ? obfuscateInlineJs(body, idState) : body;
-    const min = minifyJs(obfuscated);
+    const min = minifyJsFallback(obfuscated);
     return `<script${attrs}>${min}</script>`;
   });
 
   html = html.replace(/<style\b([^>]*)>([\s\S]*?)<\/style>/gi, (match, attrs, body) => {
-    const min = minifyCss(body);
+    const min = minifyCssFallback(body);
     return `<style${attrs}>${min}</style>`;
   });
 
@@ -525,14 +531,96 @@ function minifyHtml(text, idState) {
     .trim();
 }
 
-function minifyText(text, ext) {
-  if (ext === ".js") return minifyJs(text);
+function looksLikeModuleJs(text) {
+  return /^\s*(import|export)\s/m.test(String(text || ""));
+}
+
+function obfuscateJsWithLibrary(text) {
+  return JavaScriptObfuscator.obfuscate(text, {
+    compact: true,
+    controlFlowFlattening: false,
+    deadCodeInjection: false,
+    disableConsoleOutput: false,
+    identifierNamesGenerator: "hexadecimal",
+    renameGlobals: false,
+    simplify: true,
+    splitStrings: false,
+    stringArray: true,
+    stringArrayRotate: true,
+    transformObjectKeys: false
+  }).getObfuscatedCode();
+}
+
+async function minifyJs(text, options = {}) {
+  const source = String(text || "");
+  const shouldObfuscate = Boolean(options.obfuscate) && !looksLikeModuleJs(source);
+  const prepared = shouldObfuscate ? obfuscateJsWithLibrary(source) : source;
+  try {
+    const result = await terserMinify(prepared, {
+      compress: {
+        passes: 2,
+        drop_debugger: true
+      },
+      format: {
+        comments: false
+      },
+      mangle: shouldObfuscate ? false : {
+        toplevel: !options.inline
+      },
+      module: Boolean(options.module)
+    });
+    return String(result?.code || "").trim() || minifyJsFallback(prepared);
+  } catch {
+    return minifyJsFallback(prepared);
+  }
+}
+
+async function minifyCss(text) {
+  try {
+    const result = new CleanCSS({
+      level: 2
+    }).minify(String(text || ""));
+    if (!result.errors?.length && result.styles) {
+      return result.styles.trim();
+    }
+  } catch {
+    // Fallback below.
+  }
+  return minifyCssFallback(text);
+}
+
+async function minifyHtml(text, idState) {
+  const source = String(text || "");
+  const processed = source.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
+    const isModule = /\btype\s*=\s*["']module["']/i.test(attrs);
+    if (!idState || !VARENV_ENABLED || isModule) return match;
+    return `<script${attrs}>${obfuscateJsWithLibrary(body)}</script>`;
+  });
+  try {
+    return await htmlMinify(processed, {
+      collapseBooleanAttributes: true,
+      collapseWhitespace: true,
+      minifyCSS: (css) => minifyCssFallback(css),
+      minifyJS: (js) => minifyJsFallback(js),
+      removeAttributeQuotes: true,
+      removeComments: true,
+      removeEmptyAttributes: false,
+      sortAttributes: true,
+      sortClassName: true
+    });
+  } catch {
+    return minifyHtmlFallback(processed, idState);
+  }
+}
+
+async function minifyText(text, ext) {
+  if (ext === ".js") return minifyJs(text, { obfuscate: VARENV_ENABLED, module: looksLikeModuleJs(text) });
   if (ext === ".css") return minifyCss(text);
   if (ext === ".html") return minifyHtml(text, minifyIdState);
   return text;
 }
 
-function minifyWebAssets(sourceDir, targetDir) {
+async function minifyWebAssets(sourceDir, targetDir) {
   minifyIdState = loadMinifyIdState();
   if (!fs.existsSync(sourceDir)) {
     console.log(`[Minify] source missing: ${sourceDir}`);
@@ -560,7 +648,7 @@ function minifyWebAssets(sourceDir, targetDir) {
       const shouldBypassMinify = relPath.startsWith("js/pentapod/") || relPath.startsWith("ide/ui/");
       if ((ext === ".html" || ext === ".css" || ext === ".js") && !shouldBypassMinify) {
         const raw = fs.readFileSync(srcPath, "utf8");
-        const min = minifyText(raw, ext);
+        const min = await minifyText(raw, ext);
         fs.writeFileSync(dstPath, min + "\n");
       } else {
         fs.copyFileSync(srcPath, dstPath);
@@ -712,6 +800,7 @@ app.use("/api/photon", photonRouter);
 app.use("/api/chat", createChatRouter({ projectRoot: PROJECT_ROOT }));
 app.use("/api/gameeditor", gameEditorRouter);
 app.use("/api/changelog", changelogRouter);
+app.use("/api/roadmap", roadmapRouter);
 app.use("/sdk", cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
@@ -1168,7 +1257,7 @@ async function processAccountDeletions() {
 /* -----------------------------
    START
 ----------------------------- */
-minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
+await minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
 await initDb();
 await processAccountDeletions();
 setInterval(processAccountDeletions, 6 * 60 * 60 * 1000);

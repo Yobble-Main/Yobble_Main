@@ -790,5 +790,19 @@ export async function initDb() {
   await addColumnIfMissing("changelog_entries", "status", "TEXT DEFAULT 'published'");
   await addColumnIfMissing("changelog_entries", "updated_at", "INTEGER");
 
+  await run(`CREATE TABLE IF NOT EXISTS roadmap_entries(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    created_by TEXT,
+    status TEXT DEFAULT 'published',
+    updated_at INTEGER,
+    sort_order INTEGER DEFAULT 0
+  )`);
+  await addColumnIfMissing("roadmap_entries", "status", "TEXT DEFAULT 'published'");
+  await addColumnIfMissing("roadmap_entries", "updated_at", "INTEGER");
+  await addColumnIfMissing("roadmap_entries", "sort_order", "INTEGER DEFAULT 0");
+
   console.log("[DB] schema ready");
 }

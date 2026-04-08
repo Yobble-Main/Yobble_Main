@@ -305,6 +305,7 @@ async function loadInvitePreview(invite, card, titleEl, metaEl, joinBtn) {
       titleEl.textContent = "Invite to #" + data.channel.name;
       metaEl.textContent = "Join #" + data.channel.name + " from this invite link.";
       joinBtn.disabled = false;
+      joinBtn.textContent = "Join";
       return;
     }
     setInviteCardUnavailable(card, titleEl, metaEl, joinBtn, "This invite is unavailable.");
@@ -343,6 +344,10 @@ function createInviteCard(invite) {
     joinBtn.disabled = true;
     joinBtn.textContent = "Joining...";
     const joined = await joinInvite(invite.token);
+    if (joined) {
+      joinBtn.textContent = "Joined";
+      return;
+    }
     if (!joined) {
       setInviteCardUnavailable(card, title, meta, joinBtn, channelMeta.textContent);
     }
@@ -390,6 +395,10 @@ async function fetchRooms(options) {
     currentChannelName = rooms[0].name;
   }
   if (shouldSwitch) switchChannel(currentChannelId);
+}
+
+function isCompactChatLayout() {
+  return window.matchMedia("(max-width: 900px)").matches;
 }
 
 function startRoomRefresh() {
@@ -441,6 +450,9 @@ function switchChannel(roomId) {
   connectWS();
   renderRoomList();
   loadHistory(true);
+  if (isCompactChatLayout()) {
+    setSidebarCollapsed(true);
+  }
 }
 
 function connectWS() {
@@ -675,6 +687,10 @@ function setSidebarCollapsed(collapsed) {
   const label = collapsed ? "Show" : "Hide";
   sidebarToggleBtn.textContent = label;
   sidebarToggleBtnHeader.textContent = collapsed ? "Rooms" : "Hide Rooms";
+}
+
+if (isCompactChatLayout()) {
+  setSidebarCollapsed(true);
 }
 
 sidebarToggleBtn.addEventListener("click", function () {
