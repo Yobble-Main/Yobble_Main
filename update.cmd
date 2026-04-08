@@ -32,6 +32,6 @@ REM Copy files WITHOUT deleting anything in destination
 REM Exclude common save folders/files (edit these as needed)
 echo Copying files...
 
-robocopy "%REPO_DIR%" "%DEST_DIR%" /E /XO /XD .git saves save data userdata playerdata /XF *.sav *.save *.dat *.json
+robocopy "%REPO_DIR%" "%DEST_DIR%" /E /XO /XD .git saves save data userdata playerdata /XF *.sav *.save *.dat
 
 echo === Done! Save data preserved ===
