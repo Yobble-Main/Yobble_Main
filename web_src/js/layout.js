@@ -152,3 +152,7 @@ export async function mountTopbar(page){
     balanceEl.remove();
   }
 }
+
+export async function loadLayout(page = "") {
+  return mountTopbar(page);
+}
