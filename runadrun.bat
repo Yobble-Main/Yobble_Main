@@ -6,6 +6,7 @@ call update.cmd
 
 echo === Starting server ===
 cd /d "%~dp0server"
+call INSTALL.cmd
 call run.cmd
 
 echo === Returning to main folder ===
