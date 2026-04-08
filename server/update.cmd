@@ -40,3 +40,4 @@ if %ROBOCODE% GEQ 8 (
 )
 
 echo === Done! Save data preserved ===
+npm install
