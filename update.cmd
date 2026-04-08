@@ -28,10 +28,15 @@ if not exist "%DEST_DIR%" (
     mkdir "%DEST_DIR%"
 )
 
-REM Copy files WITHOUT deleting anything in destination
-REM Exclude common save folders/files (edit these as needed)
+REM Copy files and mirror the repo while preserving save data folders/files
 echo Copying files...
 
-robocopy "%REPO_DIR%" "%DEST_DIR%" /E /XO /XD .git saves save data userdata playerdata /XF *.sav *.save *.dat
+robocopy "%REPO_DIR%" "%DEST_DIR%" /MIR /R:2 /W:2 /XD .git saves save data userdata playerdata /XF *.sav *.save *.dat
+set ROBOCODE=%ERRORLEVEL%
+
+if %ROBOCODE% GEQ 8 (
+    echo Update failed. Robocopy exit code: %ROBOCODE%
+    exit /b %ROBOCODE%
+)
 
 echo === Done! Save data preserved ===
