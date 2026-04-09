@@ -13,7 +13,7 @@ Yobble is a game publishing platform with a web UI, API server, and desktop clie
 - `server/src` API server and websocket chat
 - `web_src` web frontend source (served/minified at runtime)
 - `temp/web-runtime` generated web runtime output
-- `game_storage` uploaded game builds
+- `save/uploads/games` uploaded game builds
 - `save` data assets (TOS, item icons, levels)
 - `Client_linux` packaged Linux client assets
 - `Client_win` packaged Windows client assets
@@ -49,7 +49,7 @@ scripts/build-appimage.sh 0.7.0
 ```
 
 ## Data locations
-- Uploaded games: `game_storage/`
+- Uploaded games: `save/uploads/games/`
 - Uploaded items/icons: `save/item_icons/`
 - TOS content: `save/tos`
 - Custom levels: `save/custom_levels/`

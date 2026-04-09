@@ -119,6 +119,9 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
+                if (is404PageUrl(url)) {
+                    return;
+                }
                 if (!hasRestoredLocalStorage && initialLocalStorageSnapshot != null && !initialLocalStorageSnapshot.isEmpty()) {
                     hasRestoredLocalStorage = true;
                     restoreLocalStorageSnapshot(initialLocalStorageSnapshot);
@@ -243,6 +246,21 @@ public class MainActivity extends Activity {
             webViewContainer.addView(webView,
                     new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+    }
+
+    private boolean is404PageUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        try {
+            Uri uri = Uri.parse(url);
+            String path = uri.getPath();
+            if (path == null || path.isEmpty()) return false;
+            return path.equals("/404")
+                    || path.equals("/404.html")
+                    || path.endsWith("/404")
+                    || path.endsWith("/404.html");
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -128,7 +128,7 @@ gameHostingRouter.post("/upload", requireAuth, upload.single("zip"), async (req,
     }
   }
 
-  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
   const destDir = path.join(GAME_STORAGE_DIR, project, version);
 
   fs.mkdirSync(destDir, { recursive:true });
@@ -509,7 +509,7 @@ gameHostingRouter.post("/version/delete", requireAuth, async (req, res) => {
 
   const SERVER_DIR = path.resolve(process.cwd());
   const PROJECT_ROOT = path.resolve(SERVER_DIR, "..");
-  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 
   try{
     const target = safeVersionPath(GAME_STORAGE_DIR, project, version);

@@ -42,7 +42,8 @@ import {
   createChatRouter,
   gameEditorRouter,
   changelogRouter,
-  roadmapRouter
+  roadmapRouter,
+  gitInfoRouter
 } from "./routes/_routers.js";
 import { attachChatWs } from "./routes/chat.js";
 
@@ -71,7 +72,8 @@ const routerImports = [
   ["createChatRouter", createChatRouter],
   ["gameEditorRouter", gameEditorRouter],
   ["changelogRouter", changelogRouter],
-  ["roadmapRouter", roadmapRouter]
+  ["roadmapRouter", roadmapRouter],
+  ["gitInfoRouter", gitInfoRouter]
 ];
 console.log("[Routers]", routerImports.map(([name, ref]) => `${name}:${ref ? "ok" : "missing"}`).join(" | "));
 
@@ -88,7 +90,8 @@ const WEB_SOURCE_DIR = fs.existsSync(path.join(PROJECT_ROOT, "web_src"))
   : (fs.existsSync(path.join(PROJECT_ROOT, "web_backup"))
       ? path.join(PROJECT_ROOT, "web_backup")
       : WEB_DIR);
-const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+const LEGACY_GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 const TOS_PATH = path.join(PROJECT_ROOT, "/save/tos");
 const ITEM_ICON_DIR = path.join(PROJECT_ROOT, "save", "item_icons");
 const TURBOWARP_EXTENSION_PATH = path.join(PROJECT_ROOT, "web_src", "turbowarp-extension.js");
@@ -713,6 +716,91 @@ function listFilesRecursive(baseDir, sub = "") {
   return out;
 }
 
+function escapeXml(value) {
+  return String(value ?? "").replace(/[<>&'"]/g, (char) => ({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;"
+  }[char]));
+}
+
+function buildSitemapXml(baseUrl) {
+  const now = new Date().toISOString();
+  const pages = [
+    { path: "/", changefreq: "daily", priority: "1.0" },
+    { path: "/games", changefreq: "daily", priority: "0.9" },
+    { path: "/game", changefreq: "daily", priority: "0.8" },
+    { path: "/blog", changefreq: "weekly", priority: "0.8" },
+    { path: "/blog-post", changefreq: "weekly", priority: "0.6" },
+    { path: "/changelog", changefreq: "weekly", priority: "0.8" },
+    { path: "/marketplace", changefreq: "daily", priority: "0.8" },
+    { path: "/market", changefreq: "daily", priority: "0.8" },
+    { path: "/download", changefreq: "monthly", priority: "0.7" },
+    { path: "/stats", changefreq: "weekly", priority: "0.6" },
+    { path: "/tos", changefreq: "yearly", priority: "0.4" },
+    { path: "/support", changefreq: "monthly", priority: "0.5" },
+    { path: "/sitemap", changefreq: "weekly", priority: "0.5" },
+    { path: "/version-info", changefreq: "daily", priority: "0.6" }
+  ];
+
+  const urls = pages.map((page) => `  <url>
+    <loc>${escapeXml(baseUrl + page.path)}</loc>
+    <lastmod>${now}</lastmod>
+    <changefreq>${page.changefreq}</changefreq>
+    <priority>${page.priority}</priority>
+  </url>`).join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>
+`;
+}
+
+function moveDirectoryContents(sourceDir, targetDir) {
+  if (!fs.existsSync(sourceDir)) return;
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      moveDirectoryContents(sourcePath, targetPath);
+      const remaining = fs.readdirSync(sourcePath);
+      if (!remaining.length) {
+        fs.rmdirSync(sourcePath);
+      }
+      continue;
+    }
+
+    if (fs.existsSync(targetPath)) {
+      fs.rmSync(targetPath, { force: true });
+    }
+    fs.renameSync(sourcePath, targetPath);
+  }
+}
+
+function migrateLegacyGameStorage() {
+  if (!fs.existsSync(LEGACY_GAME_STORAGE_DIR)) {
+    fs.mkdirSync(GAME_STORAGE_DIR, { recursive: true });
+    return;
+  }
+
+  moveDirectoryContents(LEGACY_GAME_STORAGE_DIR, GAME_STORAGE_DIR);
+
+  try {
+    const remaining = fs.readdirSync(LEGACY_GAME_STORAGE_DIR);
+    if (!remaining.length) {
+      fs.rmdirSync(LEGACY_GAME_STORAGE_DIR);
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 const app = express();
 app.set("trust proxy", true);
 app.use(cors({
@@ -801,6 +889,7 @@ app.use("/api/chat", createChatRouter({ projectRoot: PROJECT_ROOT }));
 app.use("/api/gameeditor", gameEditorRouter);
 app.use("/api/changelog", changelogRouter);
 app.use("/api/roadmap", roadmapRouter);
+app.use("/api/git-info", gitInfoRouter);
 app.use("/sdk", cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
@@ -1144,6 +1233,14 @@ app.get("/favicon.ico", (req, res) => {
   res.sendFile(path.join(WEB_DIR, "assets", "favicon.ico"));
 });
 
+app.get("/sitemap.xml", (req, res) => {
+  const host = req.get("host") || "localhost";
+  const protocol = req.protocol || "http";
+  const baseUrl = `${protocol}://${host}`;
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.send(buildSitemapXml(baseUrl));
+});
+
 app.get("/:page", (req, res, next) => {
   const p = String(req.params.page || "");
   if (p.includes(".") || p.includes("/")) return next();
@@ -1257,6 +1354,7 @@ async function processAccountDeletions() {
 /* -----------------------------
    START
 ----------------------------- */
+await Promise.resolve(migrateLegacyGameStorage());
 await minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
 await initDb();
 await processAccountDeletions();

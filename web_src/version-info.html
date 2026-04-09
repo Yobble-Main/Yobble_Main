@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Version Info - Yobble</title>
+<link rel="stylesheet" href="/theme.css" rel="stylesheet"><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<main>
+  <h1>Version Info</h1>
+  <p class="muted">Shows the platform version from the on-disk package file only.</p>
+  <div id="summary" class="grid" style="margin-top:16px"></div>
+  <section class="card" style="margin-top:18px">
+    <h2 id="listTitle">Latest On-Disk Version</h2>
+    <div id="status" class="muted">Loading…</div>
+    <div id="entries" class="grid" style="margin-top:12px"></div>
+  </section>
+</main>
+<script type="module" src="/js/pages/version-info.js"></script>
+<script type="module">
+  import { loadLayout } from "/js/layout.js";
+  loadLayout();
+</script>
+</body>
+</html>

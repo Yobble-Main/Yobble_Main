@@ -7,7 +7,7 @@ import { requireAuth } from "../auth.js";
 export const gamesRouter = express.Router();
 
 const PROJECT_ROOT = path.resolve(process.cwd(), "server", "..");
-const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 
 /* -----------------------------
    Helpers

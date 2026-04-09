@@ -28,6 +28,7 @@ import { createChatRouter } from "./chat.js";
 import { gameEditorRouter } from "./gameeditor.js";
 import { changelogRouter } from "./changelog.js";
 import { roadmapRouter } from "./roadmap.js";
+import { gitInfoRouter } from "./git-info.js";
 
 export {
   authRouter,
@@ -54,5 +55,6 @@ export {
   createChatRouter,
   gameEditorRouter,
   changelogRouter,
-  roadmapRouter
+  roadmapRouter,
+  gitInfoRouter
 };
