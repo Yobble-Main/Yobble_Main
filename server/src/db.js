@@ -547,6 +547,7 @@ export async function initDb() {
   await addColumnIfMissing("reports", "resolved_by", "INTEGER");
   await addColumnIfMissing("reports", "resolved_at", "INTEGER");
   await addColumnIfMissing("reports", "resolution_note", "TEXT");
+  await addColumnIfMissing("reports", "ai_priority", "TEXT");
 
   await run(`CREATE TABLE IF NOT EXISTS report_evidence(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
