@@ -1,4 +1,4 @@
-import { requireLogin } from "../auth.js";
+    import { requireLogin } from "../auth.js";
     import { mountShell, setContent } from "../nav.js";
     import { api } from "../api.js";
 

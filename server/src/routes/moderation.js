@@ -773,18 +773,27 @@ async function runInstallOllama() {
       });
 
     } else if (platform === "linux") {
-      // Linux: run the official install script which places the binary in /usr/local/bin.
-      // If the user is not root, fall back to a user-local install under ~/.local/bin.
+      // Linux: run the official install script with OLLAMA_INSTALL_DIR set to a
+      // user-writable path (~/.local/bin) so no sudo/root access is required.
       const homeDir = os.homedir();
       const localBin = path.join(homeDir, ".local", "bin");
       await fs.mkdir(localBin, { recursive: true });
 
-      ollamaInstall.log.push("Downloading Ollama Linux binary...");
-      // Use the official install script with a user-writable target.
+      // Download the install script to a temp file before executing it,
+      // rather than piping directly from curl, to avoid pipe-to-shell risks.
+      const tmpDir = path.join(os.tmpdir(), `ollama-install-${Date.now()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+      const scriptPath = path.join(tmpDir, "ollama-install.sh");
+
+      ollamaInstall.log.push("Downloading Ollama install script...");
+      await downloadFile("https://ollama.com/install.sh", scriptPath);
+      await fs.chmod(scriptPath, 0o700);
+      ollamaInstall.log.push("Running install script (user-local)...");
+
       await new Promise((resolve, reject) => {
-        const proc = spawn("sh", ["-c",
-          `curl -fsSL https://ollama.com/install.sh | OLLAMA_INSTALL_DIR=${localBin} sh`
-        ]);
+        const proc = spawn("sh", [scriptPath], {
+          env: { ...process.env, OLLAMA_INSTALL_DIR: localBin },
+        });
         proc.stdout?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
         proc.stderr?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
         proc.on("close", (code) => {
