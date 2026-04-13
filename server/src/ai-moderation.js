@@ -2,30 +2,20 @@
  * ai-moderation.js
  *
  * Local Ollama AI content moderation module.
- * Inference runs on the local machine via Ollama — no cloud API key required.
  *
  * Setup:
  *   1. Install Ollama: https://ollama.com/download
  *   2. Pull a model:   ollama pull llama3.2
- *   3. Start Ollama:   ollama serve  (or it starts automatically on most platforms)
+ *   3. Start Ollama:   ollama serve
  *
  * Optional environment variables:
- *   OLLAMA_BASE_URL  — Ollama server URL (default: http://localhost:11434)
- *   OLLAMA_MODEL     — Model name to use  (default: llama3.2)
- *
- * Usage:
- *   import { moderateText, ModerationSeverity } from "./ai-moderation.js";
- *   const result = await moderateText("some user input");
- *   // result: { flagged, severity, reason, categories }
+ *   OLLAMA_BASE_URL  - Ollama server URL (default: http://localhost:11434)
+ *   OLLAMA_MODEL     - Model name to use (default: llama3.2)
  */
 
-// ── Model selection ──────────────────────────────────────────────────────────
-// llama3.2 is a capable, lightweight model well-suited for classification tasks.
-// Override with the OLLAMA_MODEL environment variable if you prefer another model.
 const MODEL = process.env.OLLAMA_MODEL || "llama3.2";
 const BASE_URL = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
 
-// ── Severity levels ──────────────────────────────────────────────────────────
 export const ModerationSeverity = Object.freeze({
   NONE: "none",
   LOW: "low",
@@ -33,36 +23,108 @@ export const ModerationSeverity = Object.freeze({
   HIGH: "high",
 });
 
-// ── Moderation prompt ────────────────────────────────────────────────────────
 const SYSTEM_INSTRUCTION = `You are a strict content moderation AI for a game-sharing platform whose audience includes minors.
 
-Analyse the provided user-generated text and return ONLY a JSON object — no markdown, no code fences, just raw JSON.
+Analyse the provided user-generated text and return ONLY one valid JSON object. Do not return markdown, code fences, commentary, or any text before or after the JSON.
 
-Schema:
+Return this exact JSON shape:
 {
-  "flagged": boolean,
-  "severity": "none" | "low" | "medium" | "high",
-  "reason": "short plain-text explanation or empty string",
-  "categories": string[]   // e.g. ["hate_speech","violence","spam","sexual","harassment","self_harm","other"]
+  "flagged": false,
+  "severity": "none",
+  "reason": "",
+  "categories": []
 }
 
+Rules:
+- "flagged" must be a JSON boolean.
+- "severity" must be exactly one of "none", "low", "medium", or "high".
+- "reason" must be a short plain string.
+- "categories" must be a JSON array of strings.
+- Do not include extra keys.
+
 Severity guide:
-  none   – clean content
-  low    – borderline or mildly inappropriate (e.g. minor rudeness, mild suggestive language)
-  medium – clearly inappropriate but not illegal (e.g. profanity, bullying, graphic but not extreme violence)
-  high   – illegal, extremely harmful, or zero-tolerance content (CSAM, doxxing, credible threats, severe hate speech)
+  none   - clean content
+  low    - borderline or mildly inappropriate (e.g. minor rudeness, mild suggestive language)
+  medium - clearly inappropriate but not illegal (e.g. profanity, bullying, graphic but not extreme violence)
+  high   - illegal, extremely harmful, or zero-tolerance content (CSAM, doxxing, credible threats, severe hate speech)
 
-Be conservative — only flag content that is genuinely problematic. Do NOT flag gaming terminology, competitive trash-talk within reason, or discussion of mature themes in an educational context.`;
+Be conservative - only flag content that is genuinely problematic. Do NOT flag gaming terminology, competitive trash-talk within reason, or discussion of mature themes in an educational context.`;
 
-/**
- * Moderate a piece of text using a local Ollama model.
- *
- * @param {string} text  – The user-generated content to check.
- * @returns {Promise<{flagged:boolean, severity:string, reason:string, categories:string[]}>}
- *          Falls back to a safe "pass" result if Ollama is unavailable or returns an error.
- */
+function fallbackResult() {
+  return {
+    flagged: false,
+    severity: ModerationSeverity.NONE,
+    reason: "",
+    categories: []
+  };
+}
+
+function extractJsonObject(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+
+  const withoutFences = text
+    .replace(/^```[a-z]*\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  if (withoutFences.startsWith("{") && withoutFences.endsWith("}")) {
+    return withoutFences;
+  }
+
+  const firstBrace = withoutFences.indexOf("{");
+  if (firstBrace === -1) return "";
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = firstBrace; i < withoutFences.length; i += 1) {
+    const ch = withoutFences[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return withoutFences.slice(firstBrace, i + 1);
+      }
+    }
+  }
+
+  return "";
+}
+
+function normalizeModerationResult(parsed) {
+  return {
+    flagged: !!parsed?.flagged,
+    severity: Object.values(ModerationSeverity).includes(parsed?.severity)
+      ? parsed.severity
+      : ModerationSeverity.NONE,
+    reason: typeof parsed?.reason === "string" ? parsed.reason.slice(0, 500) : "",
+    categories: Array.isArray(parsed?.categories)
+      ? parsed.categories.filter((c) => typeof c === "string").slice(0, 20)
+      : [],
+  };
+}
+
 export async function moderateText(text) {
-  const fallback = { flagged: false, severity: ModerationSeverity.NONE, reason: "", categories: [] };
+  const fallback = fallbackResult();
   if (!text || typeof text !== "string") return fallback;
 
   try {
@@ -78,7 +140,6 @@ export async function moderateText(text) {
           { role: "user", content: String(text).slice(0, 4000) },
         ],
       }),
-      // 15-second timeout so a slow/busy model doesn't stall requests.
       signal: AbortSignal.timeout(15000),
     });
 
@@ -89,45 +150,28 @@ export async function moderateText(text) {
 
     const data = await response.json();
     const raw = data?.message?.content?.trim() ?? "";
-    // Strip any accidental markdown code fences the model may include.
-    const jsonStr = raw.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
-    const parsed = JSON.parse(jsonStr);
+    const jsonStr = extractJsonObject(raw);
+    if (!jsonStr) {
+      throw new Error("no_json_object_returned");
+    }
 
-    return {
-      flagged: !!parsed.flagged,
-      severity: Object.values(ModerationSeverity).includes(parsed.severity)
-        ? parsed.severity
-        : ModerationSeverity.NONE,
-      reason: typeof parsed.reason === "string" ? parsed.reason.slice(0, 500) : "",
-      categories: Array.isArray(parsed.categories)
-        ? parsed.categories.filter((c) => typeof c === "string")
-        : [],
-    };
+    return normalizeModerationResult(JSON.parse(jsonStr));
   } catch (err) {
     if (err?.name === "TimeoutError" || err?.name === "AbortError") {
-      console.error("[ai-moderation] request timed out — Ollama may be slow or overloaded");
+      console.error("[ai-moderation] request timed out - Ollama may be slow or overloaded");
     } else {
       console.error("[ai-moderation] error:", err?.message ?? err);
     }
-    // Fail open — do not block content when the AI service is unavailable.
     return fallback;
   }
 }
 
-/**
- * Convenience helper: moderate multiple text fields at once.
- * Useful for game/item uploads where you want to check title + description together.
- *
- * @param {Object} fields  – Plain object of { fieldName: text } pairs.
- * @returns {Promise<{flagged, severity, reason, categories}>}
- */
 export async function moderateFields(fields) {
   const entries = Object.entries(fields).filter(([, v]) => typeof v === "string" && v.trim());
   if (!entries.length) {
-    return { flagged: false, severity: ModerationSeverity.NONE, reason: "", categories: [] };
+    return fallbackResult();
   }
 
-  // Combine fields into one request to minimise API calls.
   const combined = entries.map(([name, val]) => `[${name}]: ${val}`).join("\n\n");
   return moderateText(combined);
 }
