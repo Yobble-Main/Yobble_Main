@@ -5,15 +5,15 @@
  *
  * Setup:
  *   1. Install Ollama: https://ollama.com/download
- *   2. Pull a model:   ollama pull llama3.2
+ *   2. Pull a model:   ollama pull gemma4:e2b
  *   3. Start Ollama:   ollama serve
  *
  * Optional environment variables:
  *   OLLAMA_BASE_URL  - Ollama server URL (default: http://localhost:11434)
- *   OLLAMA_MODEL     - Model name to use (default: llama3.2)
+ *   OLLAMA_MODEL     - Model name to use (default: gemma4:e2b)
  */
 
-const MODEL = process.env.OLLAMA_MODEL || "llama3.2";
+const MODEL = process.env.OLLAMA_MODEL || "gemma4:e2b";
 const BASE_URL = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
 
 export const ModerationSeverity = Object.freeze({

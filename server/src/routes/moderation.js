@@ -1017,7 +1017,7 @@ moderationRouter.get("/ai/install/status", requireAuth, requireRole(...MOD_ROLES
 
 /* POST /api/mod/ai/pull */
 moderationRouter.post("/ai/pull", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
-  const model = String(req.body?.model || "llama3.2").trim();
+  const model = String(req.body?.model || "gemma4:e2b").trim();
   if (!model) return res.status(400).json({ error: "missing_model" });
 
   try {
@@ -1044,7 +1044,7 @@ moderationRouter.post("/ai/pull", requireAuth, requireRole(...MOD_ROLES), async 
 
 /* POST /api/mod/ai/chat */
 moderationRouter.post("/ai/chat", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
-  const model = String(req.body?.model || process.env.OLLAMA_MODEL || "llama3.2").trim();
+  const model = String(req.body?.model || process.env.OLLAMA_MODEL || "gemma4:e2b").trim();
   const messages = req.body?.messages;
   if (!Array.isArray(messages) || !messages.length) {
     return res.status(400).json({ error: "missing_messages" });

@@ -29,7 +29,7 @@
           <div class="h2">Models</div>
           <div id="models-list" class="muted">No models loaded.</div>
           <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-            <input id="pull-model-input" type="text" placeholder="Model name (e.g. llama3.2)" style="flex:1;min-width:120px">
+            <input id="pull-model-input" type="text" placeholder="Model name (e.g. gemma4:e2b)" style="flex:1;min-width:120px">
             <button id="btn-pull">Pull model</button>
           </div>
           <div id="pull-status" style="margin-top:6px;font-size:13px"></div>
@@ -40,7 +40,7 @@
           <div class="muted" style="margin-bottom:8px">Chat directly with the local AI model.</div>
           <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
             <span style="font-size:13px">Model:</span>
-            <input id="chat-model-input" type="text" value="llama3.2" style="width:180px">
+            <input id="chat-model-input" type="text" value="gemma4:e2b" style="width:180px">
           </div>
           <div id="chat-messages" style="min-height:200px;max-height:400px;overflow-y:auto;background:var(--surface,#1a1f28);border-radius:8px;padding:12px;margin-bottom:8px;display:flex;flex-direction:column;gap:8px"></div>
           <div style="display:flex;gap:8px">
@@ -167,7 +167,7 @@
     document.getElementById("btn-send").addEventListener("click", async () => {
       const text = chatInput.value.trim();
       if (!text) return;
-      const model = document.getElementById("chat-model-input").value.trim() || "llama3.2";
+      const model = document.getElementById("chat-model-input").value.trim() || "gemma4:e2b";
       chatInput.value = "";
       chatStatus.textContent = "";
       appendMessage("user", text);
