@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import { requireAuth, requireRole } from "../auth.js";
 import { run, all } from "../db.js";
+import { moderateText } from "../ai-moderation.js";
 
 export const reportsRouter = express.Router();
 
@@ -29,11 +30,22 @@ async function createReport(req, res){
     return res.status(400).json({ error:"missing_fields" });
   }
 
+  // AI triage: analyse the reporter's description to assign a priority hint for moderators.
+  let aiPriority = null;
+  try {
+    const aiResult = await moderateText(`Report category: ${cat || "none"}\nReport message: ${msg}`);
+    if (aiResult.flagged) {
+      aiPriority = aiResult.severity; // 'low' | 'medium' | 'high'
+    }
+  } catch (err) {
+    console.error("[ai-moderation] report triage failed:", err?.message);
+  }
+
   const result = await run(
     `INSERT INTO reports
-     (reporter_id,target_type,target_ref,category,message,created_at)
-     VALUES(?,?,?,?,?,?)`,
-    [req.user.uid, target_type, ref, cat || null, msg, Date.now()]
+     (reporter_id,target_type,target_ref,category,message,created_at,ai_priority)
+     VALUES(?,?,?,?,?,?,?)`,
+    [req.user.uid, target_type, ref, cat || null, msg, Date.now(), aiPriority]
   );
   res.json({ ok:true, report_id: result.lastID });
 }
@@ -61,7 +73,9 @@ reportsRouter.get("/mod", requireAuth, requireRole("moderator"), async (_req,res
     FROM reports r
     JOIN users u ON u.id=r.reporter_id
     WHERE r.status='open'
-    ORDER BY r.created_at
+    ORDER BY
+      CASE r.ai_priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
+      r.created_at
   `);
   res.json({reports:rows});
 });

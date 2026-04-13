@@ -11,6 +11,7 @@
     "update-deps": "node tools/update-deps.js"
   },
   "dependencies": {
+    "@google/genai": "^1.49.0",
     "bcryptjs": "^3.0.3",
     "clean-css": "^5.3.3",
     "compression": "^1.8.1",

@@ -4,6 +4,7 @@ import path from "path";
 import fs from "fs";
 import { requireAuth } from "../auth.js";
 import { get, run, all } from "../db.js";
+import { moderateFields, ModerationSeverity } from "../ai-moderation.js";
 
 export const itemsRouter = express.Router();
 
@@ -81,13 +82,28 @@ itemsRouter.post(
       }
 
       /* -----------------------------
+         AI content moderation
+      ------------------------------ */
+      let aiFlag = null;
+      try {
+        const aiResult = await moderateFields({ name, description });
+        if (aiResult.severity === ModerationSeverity.HIGH) {
+          return res.status(400).json({ ok: false, error: "content_policy_violation" });
+        }
+        aiFlag = aiResult.flagged ? aiResult.severity : null;
+      } catch (aiErr) {
+        console.error("[ai-moderation] item moderation failed:", aiErr?.message);
+        // Fail open — do not block the upload when AI is unavailable.
+      }
+
+      /* -----------------------------
          Insert item (pending)
       ------------------------------ */
       await run(
         `INSERT INTO items
          (code, name, description, icon_path, price,
-          approval_status, uploaded_by, created_at)
-         VALUES (?,?,?,?,?,?,?,?)`,
+          approval_status, uploaded_by, created_at, ai_flag)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
         [
           code,
           name,
@@ -96,7 +112,8 @@ itemsRouter.post(
           price,
           "pending",
           req.user.uid,
-          Date.now()
+          Date.now(),
+          aiFlag,
         ]
       );
 
