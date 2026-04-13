@@ -40,6 +40,7 @@ Environment variables used by the server:
 - `PORT2` secondary HTTP port (default: `3000`)
 - `HTTPS_PORT` HTTPS port (default: `5443`)
 - `JWT_SECRET` secret used to sign and verify auth tokens; a local development fallback is used if unset
+- `GOOGLE_AI_API_KEY` *(optional)* Google AI Studio API key for Gemini 2.0 Flash AI content moderation. When set, chat messages, item uploads, and user reports are automatically screened. High-severity content is blocked outright; medium-severity content triggers an automatic moderator report. If unset, AI moderation is disabled and content passes through unchanged. Obtain a key at https://aistudio.google.com/app/apikey
 
 ## AppImage build (Linux)
 The AppImage build pulls from `Client_linux/` and produces `dist/Yobble.appimage`.

@@ -6,6 +6,7 @@ import multer from "multer";
 import crypto from "crypto";
 import { all, get, run } from "../db.js";
 import { requireAuth, verifyToken } from "../auth.js";
+import { moderateText, ModerationSeverity } from "../ai-moderation.js";
 
 const DEFAULT_ROOMS = [];
 const MAX_MESSAGE_LENGTH = 2000;
@@ -456,6 +457,38 @@ export function createChatRouter({ projectRoot }) {
     if (!text && !files.length) {
       return res.status(400).json({ error: "empty_message" });
     }
+
+    // AI content moderation (Gemini 2.0 Flash) — runs before storing the message.
+    if (text) {
+      try {
+        const aiResult = await moderateText(text);
+        if (aiResult.severity === ModerationSeverity.HIGH) {
+          // Zero-tolerance content: block immediately without storing.
+          return res.status(400).json({ error: "message_blocked", reason: "content_policy" });
+        }
+        if (aiResult.flagged && aiResult.severity === ModerationSeverity.MEDIUM) {
+          // Borderline content: allow through but create an automatic report so moderators can review.
+          try {
+            await run(
+              `INSERT INTO reports (reporter_id, target_type, target_ref, category, message, created_at)
+               VALUES (?, 'chat_message', ?, 'ai_moderation', ?, ?)`,
+              [
+                req.user.uid,
+                String(channelRow.channel_uuid),
+                `[AI] ${aiResult.reason || aiResult.categories.join(", ")}`,
+                Date.now(),
+              ]
+            );
+          } catch (reportErr) {
+            console.error("[ai-moderation] auto-report failed:", reportErr?.message);
+          }
+        }
+      } catch (aiErr) {
+        console.error("[ai-moderation] chat moderation failed:", aiErr?.message);
+        // Fail open — do not block the message when AI is unavailable.
+      }
+    }
+
     const ts = Date.now();
     try {
       const result = await run(
