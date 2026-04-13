@@ -1,12 +1,17 @@
 /**
  * ai-moderation.js
  *
- * Google Gemini 2.0 Flash AI content moderation module.
- * Optimised for low memory overhead — all inference runs on Google's cloud
- * so the host device's RAM is not a constraint.
+ * Local Ollama AI content moderation module.
+ * Inference runs on the local machine via Ollama — no cloud API key required.
  *
- * Environment variable required:
- *   GOOGLE_AI_API_KEY  — Google AI Studio / Vertex AI API key
+ * Setup:
+ *   1. Install Ollama: https://ollama.com/download
+ *   2. Pull a model:   ollama pull llama3.2
+ *   3. Start Ollama:   ollama serve  (or it starts automatically on most platforms)
+ *
+ * Optional environment variables:
+ *   OLLAMA_BASE_URL  — Ollama server URL (default: http://localhost:11434)
+ *   OLLAMA_MODEL     — Model name to use  (default: llama3.2)
  *
  * Usage:
  *   import { moderateText, ModerationSeverity } from "./ai-moderation.js";
@@ -14,12 +19,11 @@
  *   // result: { flagged, severity, reason, categories }
  */
 
-import { GoogleGenAI } from "@google/genai";
-
 // ── Model selection ──────────────────────────────────────────────────────────
-// gemini-2.0-flash: Google's newest high-throughput model, ideal for real-time
-// content moderation at low latency and cost.
-const MODEL = "gemini-2.0-flash";
+// llama3.2 is a capable, lightweight model well-suited for classification tasks.
+// Override with the OLLAMA_MODEL environment variable if you prefer another model.
+const MODEL = process.env.OLLAMA_MODEL || "llama3.2";
+const BASE_URL = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
 
 // ── Severity levels ──────────────────────────────────────────────────────────
 export const ModerationSeverity = Object.freeze({
@@ -28,17 +32,6 @@ export const ModerationSeverity = Object.freeze({
   MEDIUM: "medium",
   HIGH: "high",
 });
-
-// ── Singleton client (lazy) ──────────────────────────────────────────────────
-let _client = null;
-function getClient() {
-  if (!_client) {
-    const apiKey = process.env.GOOGLE_AI_API_KEY;
-    if (!apiKey) return null;
-    _client = new GoogleGenAI({ apiKey });
-  }
-  return _client;
-}
 
 // ── Moderation prompt ────────────────────────────────────────────────────────
 const SYSTEM_INSTRUCTION = `You are a strict content moderation AI for a game-sharing platform whose audience includes minors.
@@ -62,35 +55,40 @@ Severity guide:
 Be conservative — only flag content that is genuinely problematic. Do NOT flag gaming terminology, competitive trash-talk within reason, or discussion of mature themes in an educational context.`;
 
 /**
- * Moderate a piece of text using Gemini 2.0 Flash.
+ * Moderate a piece of text using a local Ollama model.
  *
  * @param {string} text  – The user-generated content to check.
  * @returns {Promise<{flagged:boolean, severity:string, reason:string, categories:string[]}>}
- *          Falls back to a safe "pass" result if the API is unavailable or returns an error.
+ *          Falls back to a safe "pass" result if Ollama is unavailable or returns an error.
  */
 export async function moderateText(text) {
   const fallback = { flagged: false, severity: ModerationSeverity.NONE, reason: "", categories: [] };
   if (!text || typeof text !== "string") return fallback;
 
-  const client = getClient();
-  if (!client) {
-    // No API key configured — moderation disabled, allow content through.
-    return fallback;
-  }
-
   try {
-    const response = await client.models.generateContent({
-      model: MODEL,
-      contents: [{ role: "user", parts: [{ text: String(text).slice(0, 4000) }] }],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        // Low temperature for deterministic classification
-        temperature: 0.1,
-        maxOutputTokens: 256,
-      },
+    const response = await fetch(`${BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: MODEL,
+        stream: false,
+        options: { temperature: 0.1, num_predict: 256 },
+        messages: [
+          { role: "system", content: SYSTEM_INSTRUCTION },
+          { role: "user", content: String(text).slice(0, 4000) },
+        ],
+      }),
+      // 15-second timeout so a slow/busy model doesn't stall requests.
+      signal: AbortSignal.timeout(15000),
     });
 
-    const raw = response.text?.trim() ?? "";
+    if (!response.ok) {
+      console.error(`[ai-moderation] Ollama returned HTTP ${response.status}`);
+      return fallback;
+    }
+
+    const data = await response.json();
+    const raw = data?.message?.content?.trim() ?? "";
     // Strip any accidental markdown code fences the model may include.
     const jsonStr = raw.replace(/^```[a-z]*\n?/i, "").replace(/\n?```$/i, "").trim();
     const parsed = JSON.parse(jsonStr);
@@ -106,7 +104,11 @@ export async function moderateText(text) {
         : [],
     };
   } catch (err) {
-    console.error("[ai-moderation] error:", err?.message ?? err);
+    if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+      console.error("[ai-moderation] request timed out — Ollama may be slow or overloaded");
+    } else {
+      console.error("[ai-moderation] error:", err?.message ?? err);
+    }
     // Fail open — do not block content when the AI service is unavailable.
     return fallback;
   }
