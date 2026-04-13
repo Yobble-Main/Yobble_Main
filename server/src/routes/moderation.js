@@ -717,6 +717,80 @@ const OLLAMA_BASE = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").re
 // In-memory install job state (one install at a time)
 const ollamaInstall = { running: false, done: false, error: null, log: [] };
 
+async function upsertAiDependency({
+  name,
+  kind = "service",
+  status = "unknown",
+  version = null,
+  details = null
+}) {
+  const now = Date.now();
+  await run(
+    `INSERT INTO ai_mod_dependencies(name, kind, status, version, details, updated_at)
+     VALUES(?,?,?,?,?,?)
+     ON CONFLICT(name) DO UPDATE SET
+       kind=excluded.kind,
+       status=excluded.status,
+       version=excluded.version,
+       details=excluded.details,
+       updated_at=excluded.updated_at`,
+    [name, kind, status, version, details, now]
+  );
+}
+
+async function upsertAiSetting(key, value, updatedBy = null) {
+  const now = Date.now();
+  await run(
+    `INSERT INTO ai_mod_settings(key, value, updated_at, updated_by)
+     VALUES(?,?,?,?)
+     ON CONFLICT(key) DO UPDATE SET
+       value=excluded.value,
+       updated_at=excluded.updated_at,
+       updated_by=excluded.updated_by`,
+    [key, value, now, updatedBy]
+  );
+}
+
+async function syncAiDependencies({ running, version, models }) {
+  await upsertAiDependency({
+    name: "ollama",
+    kind: "service",
+    status: running ? "ready" : "missing",
+    version: version || null,
+    details: JSON.stringify({ base_url: OLLAMA_BASE })
+  });
+
+  const modelNames = new Set();
+  for (const model of models || []) {
+    const name = String(model?.name || "").trim();
+    if (!name) continue;
+    modelNames.add(name);
+    await upsertAiDependency({
+      name: `model:${name}`,
+      kind: "model",
+      status: "ready",
+      version: null,
+      details: JSON.stringify({ size: model?.size ?? null })
+    });
+  }
+
+  const existingModels = await all(
+    `SELECT name FROM ai_mod_dependencies WHERE kind='model'`
+  );
+  for (const row of existingModels) {
+    const rawName = String(row.name || "");
+    const modelName = rawName.startsWith("model:") ? rawName.slice(6) : rawName;
+    if (modelNames.has(modelName)) continue;
+    await upsertAiDependency({
+      name: rawName,
+      kind: "model",
+      status: running ? "missing" : "unavailable",
+      version: null,
+      details: null
+    });
+  }
+}
+
 function ollamaFetch(urlPath, options = {}) {
   return new Promise((resolve, reject) => {
     const full = OLLAMA_BASE + urlPath;
@@ -866,6 +940,20 @@ async function runInstallOllama() {
     ollamaInstall.log.push(`Error: ${ollamaInstall.error}`);
   } finally {
     ollamaInstall.running = false;
+    try {
+      await upsertAiDependency({
+        name: "ollama",
+        kind: "service",
+        status: ollamaInstall.done ? "installed" : (ollamaInstall.error ? "error" : "unknown"),
+        version: null,
+        details: JSON.stringify({
+          base_url: OLLAMA_BASE,
+          error: ollamaInstall.error || null
+        })
+      });
+    } catch (dbErr) {
+      console.error("ollama dependency db sync failed:", dbErr);
+    }
   }
 }
 
@@ -893,7 +981,13 @@ moderationRouter.get("/ai/status", requireAuth, requireRole(...MOD_ROLES), async
     } catch {}
   }
 
-  res.json({ running, version, models, install: { ...ollamaInstall } });
+  await syncAiDependencies({ running, version, models });
+  const dependencies = await all(
+    `SELECT name, kind, status, version, details, updated_at
+     FROM ai_mod_dependencies
+     ORDER BY kind, name`
+  );
+  res.json({ running, version, models, install: { ...ollamaInstall }, dependencies });
 });
 
 /* POST /api/mod/ai/install */
@@ -905,6 +999,13 @@ moderationRouter.post("/ai/install", requireAuth, requireRole(...MOD_ROLES), asy
   ollamaInstall.done = false;
   ollamaInstall.error = null;
   ollamaInstall.log = [];
+  await upsertAiDependency({
+    name: "ollama",
+    kind: "service",
+    status: "installing",
+    version: null,
+    details: JSON.stringify({ base_url: OLLAMA_BASE })
+  });
   runInstallOllama().catch(() => {});
   res.json({ ok: true, message: "Install started." });
 });
@@ -927,6 +1028,14 @@ moderationRouter.post("/ai/pull", requireAuth, requireRole(...MOD_ROLES), async 
     if (r.status !== 200) {
       return res.status(502).json({ error: "ollama_error", detail: r.body.slice(0, 500) });
     }
+    await upsertAiDependency({
+      name: `model:${model}`,
+      kind: "model",
+      status: "ready",
+      version: null,
+      details: JSON.stringify({ source: "ollama_pull" })
+    });
+    await upsertAiSetting("ollama_model", model, req.user?.uid || null);
     res.json({ ok: true });
   } catch (err) {
     res.status(503).json({ error: "ollama_unavailable", detail: err.message });
@@ -947,6 +1056,7 @@ moderationRouter.post("/ai/chat", requireAuth, requireRole(...MOD_ROLES), async 
   }));
 
   try {
+    await upsertAiSetting("ollama_model", model, req.user?.uid || null);
     const r = await ollamaFetch("/api/chat", {
       method: "POST",
       body: JSON.stringify({ model, stream: false, messages: safeMessages }),

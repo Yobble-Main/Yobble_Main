@@ -804,5 +804,28 @@ export async function initDb() {
   await addColumnIfMissing("roadmap_entries", "updated_at", "INTEGER");
   await addColumnIfMissing("roadmap_entries", "sort_order", "INTEGER DEFAULT 0");
 
+  await run(`CREATE TABLE IF NOT EXISTS ai_mod_settings(
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER,
+    FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("ai_mod_settings", "updated_by", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS ai_mod_dependencies(
+    name TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'service',
+    status TEXT NOT NULL DEFAULT 'unknown',
+    version TEXT,
+    details TEXT,
+    updated_at INTEGER NOT NULL
+  )`);
+  await addColumnIfMissing("ai_mod_dependencies", "kind", "TEXT NOT NULL DEFAULT 'service'");
+  await addColumnIfMissing("ai_mod_dependencies", "status", "TEXT NOT NULL DEFAULT 'unknown'");
+  await addColumnIfMissing("ai_mod_dependencies", "version", "TEXT");
+  await addColumnIfMissing("ai_mod_dependencies", "details", "TEXT");
+  await addColumnIfMissing("ai_mod_dependencies", "updated_at", "INTEGER");
+
   console.log("[DB] schema ready");
 }
