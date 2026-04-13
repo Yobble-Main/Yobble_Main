@@ -41,6 +41,7 @@ const badWordPattern = new RegExp(
   "gi"
 );
 const chatBroadcasters = new Set();
+let chatSweepStarted = false;
 
 function broadcastChatMessage(channelId, message) {
   for (const broadcast of chatBroadcasters) {
@@ -55,6 +56,127 @@ function broadcastChatMessage(channelId, message) {
 function censorText(value) {
   if (!value) return "";
   return String(value).replace(badWordPattern, (match) => "*".repeat(match.length));
+}
+
+function hasBlockedWord(value) {
+  if (!value) return false;
+  badWordPattern.lastIndex = 0;
+  return badWordPattern.test(String(value));
+}
+
+export async function evaluateChatTextModeration(text) {
+  const normalized = String(text || "").trim();
+  const cleanResult = {
+    flagged: false,
+    severity: ModerationSeverity.NONE,
+    reason: "",
+    categories: []
+  };
+  if (!normalized) {
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult: cleanResult
+    };
+  }
+
+  if (hasBlockedWord(normalized)) {
+    return {
+      blocked: true,
+      reason: "blocked_word",
+      source: "word_filter",
+      aiResult: {
+        flagged: true,
+        severity: ModerationSeverity.MEDIUM,
+        reason: "blocked_word",
+        categories: ["profanity"]
+      }
+    };
+  }
+
+  try {
+    const aiResult = await moderateText(normalized);
+    if (aiResult.flagged && [ModerationSeverity.MEDIUM, ModerationSeverity.HIGH].includes(aiResult.severity)) {
+      return {
+        blocked: true,
+        reason: aiResult.reason || "content_policy",
+        source: "ai_moderation",
+        aiResult
+      };
+    }
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult
+    };
+  } catch (err) {
+    console.error("[ai-moderation] chat moderation failed:", err?.message);
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult: cleanResult
+    };
+  }
+}
+
+export async function scanAndRemoveBadChatMessages({ channelUuid = null, limit = 500 } = {}) {
+  const cappedLimit = Math.max(1, Math.min(Number(limit) || 500, 5000));
+  const where = ["deleted = 0", "COALESCE(text, '') <> ''"];
+  const params = [];
+  if (channelUuid) {
+    where.push("channel_uuid = ?");
+    params.push(channelUuid);
+  }
+  params.push(cappedLimit);
+
+  const rows = await all(
+    `SELECT id, channel_uuid, user, text
+     FROM chat_messages
+     WHERE ${where.join(" AND ")}
+     ORDER BY id ASC
+     LIMIT ?`,
+    params
+  );
+
+  const removed = [];
+  for (const row of rows) {
+    const verdict = await evaluateChatTextModeration(row.text);
+    if (!verdict.blocked) continue;
+    await run("UPDATE chat_messages SET deleted = 1 WHERE id = ? AND deleted = 0", [row.id]);
+    broadcastChatMessage(row.channel_uuid, {
+      type: "message_deleted",
+      id: row.id,
+      channelId: row.channel_uuid
+    });
+    removed.push({
+      id: row.id,
+      channel_uuid: row.channel_uuid,
+      user: row.user,
+      source: verdict.source,
+      reason: verdict.reason || verdict.aiResult?.reason || "content_policy"
+    });
+  }
+
+  return {
+    scanned: rows.length,
+    removed
+  };
+}
+
+async function sweepAllChatMessages(batchSize = 500) {
+  let totalScanned = 0;
+  let totalRemoved = 0;
+  while (true) {
+    const result = await scanAndRemoveBadChatMessages({ limit: batchSize });
+    totalScanned += result.scanned;
+    totalRemoved += result.removed.length;
+    if (result.scanned < batchSize) {
+      return { totalScanned, totalRemoved };
+    }
+  }
 }
 
 function sanitizeRoom(name) {
@@ -233,6 +355,21 @@ export function createChatRouter({ projectRoot }) {
   ensureDir(uploadDir);
 
   const upload = multer({ dest: uploadDir });
+
+  if (!chatSweepStarted) {
+    chatSweepStarted = true;
+    setTimeout(() => {
+      sweepAllChatMessages()
+        .then((result) => {
+          if (result.totalRemoved > 0) {
+            console.log(`[chat] removed ${result.totalRemoved} bad messages during startup sweep`);
+          }
+        })
+        .catch((err) => {
+          console.error("[chat] startup moderation sweep failed:", err);
+        });
+    }, 0);
+  }
 
   router.get("/rooms", requireAuth, async (req, res) => {
     const { username } = req.user;
@@ -454,8 +591,12 @@ export function createChatRouter({ projectRoot }) {
     const rawText = String(req.body?.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
     const text = censorText(rawText);
     const files = Array.isArray(req.files) ? req.files : [];
+    const moderation = text ? await evaluateChatTextModeration(text) : null;
     if (!text && !files.length) {
       return res.status(400).json({ error: "empty_message" });
+    }
+    if (moderation?.blocked) {
+      return res.status(400).json({ error: "message_blocked", reason: moderation.reason || "content_policy" });
     }
 
     // AI content moderation (Gemini 2.0 Flash) — runs before storing the message.
@@ -705,6 +846,8 @@ export function attachChatWs(server, { projectRoot }) {
       const rawText = String(data.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
       const text = censorText(rawText);
       if (!text) return;
+      const moderation = await evaluateChatTextModeration(text);
+      if (moderation.blocked) return;
       const ts = Date.now();
       try {
         const result = await run(

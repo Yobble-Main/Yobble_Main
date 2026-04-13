@@ -11,6 +11,7 @@ import unzipper from "unzipper";
 import { requireAuth, requireRole } from "../auth.js";
 import { all, get, run } from "../db.js";
 import { ensureTosFile } from "../tos.js";
+import { scanAndRemoveBadChatMessages } from "./chat.js";
 
 export const moderationRouter = express.Router();
 
@@ -550,6 +551,32 @@ moderationRouter.post("/chat/rooms/remove", requireAuth, requireRole(...MOD_ROLE
   await run("DELETE FROM chat_channels WHERE channel_uuid=?", [room.channel_uuid]);
 
   res.json({ ok: true });
+});
+
+/* POST /api/mod/chat/messages/scan */
+moderationRouter.post("/chat/messages/scan", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
+  const ref = String(req.body?.room || req.body?.ref || "").trim();
+  const limit = Math.max(1, Math.min(Number(req.body?.limit) || 500, 5000));
+
+  let channelUuid = null;
+  if (ref) {
+    const room = await getChatRoomByRef(ref);
+    if (!room) return res.status(404).json({ error: "room_not_found" });
+    channelUuid = room.channel_uuid;
+  }
+
+  try {
+    const result = await scanAndRemoveBadChatMessages({ channelUuid, limit });
+    res.json({
+      ok: true,
+      scanned: result.scanned,
+      removed: result.removed.length,
+      messages: result.removed
+    });
+  } catch (err) {
+    console.error("mod chat scan failed:", err);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 /* GET /api/mod/search?q= */
