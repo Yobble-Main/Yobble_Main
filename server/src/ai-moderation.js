@@ -110,6 +110,54 @@ function extractJsonObject(raw) {
   return "";
 }
 
+function parseTextFallback(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  const lowered = text.toLowerCase();
+  const severityMatch =
+    lowered.match(/\bseverity\b\s*[:=-]?\s*(none|low|medium|high)\b/i) ||
+    lowered.match(/\b(none|low|medium|high)\s+severity\b/i) ||
+    lowered.match(/\bseverity\s+is\s+(none|low|medium|high)\b/i);
+  const severity = severityMatch?.[1]?.toLowerCase() || null;
+
+  const flaggedMatch =
+    lowered.match(/\bflagged\b\s*[:=-]?\s*(true|false|yes|no)\b/i) ||
+    lowered.match(/\b(flagged|not flagged)\b/i);
+
+  let flagged = null;
+  if (flaggedMatch) {
+    const value = String(flaggedMatch[1] || flaggedMatch[0] || "").toLowerCase();
+    if (["true", "yes", "flagged"].includes(value)) flagged = true;
+    if (["false", "no", "not flagged"].includes(value)) flagged = false;
+  }
+
+  const categoriesMatch = lowered.match(/\bcategories?\b\s*[:=-]?\s*([a-z0-9_,\s-]+)/i);
+  const categories = categoriesMatch
+    ? categoriesMatch[1]
+        .split(/[,\n]/)
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+
+  const reasonMatch =
+    text.match(/\breason\b\s*[:=-]?\s*(.+)$/im) ||
+    text.match(/\bbecause\b\s+(.+)$/im);
+  const reason = reasonMatch?.[1]?.trim()?.slice(0, 500) || "";
+
+  if (!severity && flagged == null && !categories.length && !reason) {
+    return null;
+  }
+
+  return {
+    flagged: flagged ?? Boolean(severity && severity !== ModerationSeverity.NONE),
+    severity: severity || (flagged ? ModerationSeverity.MEDIUM : ModerationSeverity.NONE),
+    reason,
+    categories
+  };
+}
+
 function normalizeModerationResult(parsed) {
   return {
     flagged: !!parsed?.flagged,
@@ -134,6 +182,7 @@ export async function moderateText(text) {
       body: JSON.stringify({
         model: MODEL,
         stream: false,
+        format: "json",
         options: { temperature: 0.1, num_predict: 256 },
         messages: [
           { role: "system", content: SYSTEM_INSTRUCTION },
@@ -151,11 +200,15 @@ export async function moderateText(text) {
     const data = await response.json();
     const raw = data?.message?.content?.trim() ?? "";
     const jsonStr = extractJsonObject(raw);
-    if (!jsonStr) {
-      throw new Error("no_json_object_returned");
+    if (jsonStr) {
+      return normalizeModerationResult(JSON.parse(jsonStr));
     }
-
-    return normalizeModerationResult(JSON.parse(jsonStr));
+    const fallbackParsed = parseTextFallback(raw);
+    if (fallbackParsed) {
+      return normalizeModerationResult(fallbackParsed);
+    }
+    console.warn("[ai-moderation] no_json_object_returned", raw.slice(0, 300));
+    return fallback;
   } catch (err) {
     if (err?.name === "TimeoutError" || err?.name === "AbortError") {
       console.error("[ai-moderation] request timed out - Ollama may be slow or overloaded");
