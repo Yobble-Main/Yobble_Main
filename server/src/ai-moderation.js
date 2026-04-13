@@ -46,7 +46,7 @@ Severity guide:
   none   - clean content
   low    - borderline or mildly inappropriate (e.g. minor rudeness, mild suggestive language)
   medium - clearly inappropriate but not illegal (e.g. profanity, bullying, graphic but not extreme violence)
-  high   - illegal, extremely harmful, or zero-tolerance content (CSAM, doxxing, credible threats, severe hate speech)
+  high   - illegal, extremely harmful, or zero-tolerance content (CSAM, doxxing, credible threats, hate speech)
 
 Be conservative - only flag content that is genuinely problematic. Do NOT flag gaming terminology, competitive trash-talk within reason, or discussion of mature themes in an educational context.`;
 
