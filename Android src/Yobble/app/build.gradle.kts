@@ -11,6 +11,8 @@ val androidKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
     .orElse(providers.gradleProperty("ANDROID_KEY_ALIAS"))
 val androidKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
     .orElse(providers.gradleProperty("ANDROID_KEY_PASSWORD"))
+val androidKeystoreType = providers.environmentVariable("ANDROID_KEYSTORE_TYPE")
+    .orElse(providers.gradleProperty("ANDROID_KEYSTORE_TYPE"))
 
 val hasReleaseSigning = androidKeystorePath.isPresent
         && androidKeystorePassword.isPresent
@@ -41,6 +43,9 @@ android {
                 storePassword = androidKeystorePassword.get()
                 keyAlias = androidKeyAlias.get()
                 keyPassword = androidKeyPassword.get()
+                if (androidKeystoreType.isPresent) {
+                    storeType = androidKeystoreType.get()
+                }
             }
         }
     }
