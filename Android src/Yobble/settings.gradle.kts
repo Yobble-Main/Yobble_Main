@@ -19,6 +19,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Dorfplatformer Timetravel"
+rootProject.name = "Yobble"
 include(":app")
  
