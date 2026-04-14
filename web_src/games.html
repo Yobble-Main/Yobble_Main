@@ -56,6 +56,7 @@
   </section>
 </main>
 <script type="module">
+  // (c) Benno111 2026 _---–——.  @benno111
 import { requireAuth } from "/js/auth.js";
 import { mountTopbar } from "/js/layout.js";
 import { api } from "/js/api-pages/games.js";
@@ -125,7 +126,7 @@ function render(){
     <a class="card stack" href="/games/${encodeURIComponent(g.project)}">
       ${g.is_featured ? `<span class="pill">Featured</span>` : `<span class="pill">Community Pick</span>`}
       <strong>${escapeHtml(g.title || "Untitled")}</strong>
-      <div class="small">${escapeHtml(g.description || "No description yet. Tap to explore the build and learn more.")}</div>
+      <div class="small">${escapeHtml(g.description || "No description yet.")}</div>
       <div class="hero-meta">${meta || `<span class="pill">Uncategorized</span>`}</div>
     </a>
   `;
