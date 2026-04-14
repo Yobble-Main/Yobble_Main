@@ -1,6 +1,6 @@
 # Yobble
 
-Yobble is a game publishing platform with a web UI, API server, and desktop clients (AppImage/Windows builds). The server hosts game uploads, user accounts, moderation tools, and marketplace features, while the web frontend ships from `web_src/` and is minified into `temp/web-runtime/` at startup.
+Yobble is a unfinished game publishing platform with a web UI, API server, and desktop clients (AppImage/Windows builds). The server hosts game uploads, user accounts, moderation tools, and marketplace features, while the web frontend ships from `web_src/` and is minified into `temp/web-runtime/` at startup.
 
 ## Features
 - Game hosting with versioned assets and access controls
