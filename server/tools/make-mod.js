@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import sqlite3 from "sqlite3";
 import path from "path";
+import { openDatabase } from "../src/sqlite-compat.js";
 
 const username = process.argv[2];
 
@@ -10,7 +10,7 @@ if (!username) {
 }
 
 const DB_PATH = path.resolve("benno111engene.sqlite");
-const db = new sqlite3.Database(DB_PATH);
+const db = openDatabase(DB_PATH);
 
 db.get(
   "SELECT id, role FROM users WHERE username=?",

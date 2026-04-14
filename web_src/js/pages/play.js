@@ -10,7 +10,7 @@ if (!q.get("project") && q.get("slug")) {
 }
 const project = q.get("project") || "";
 const version = q.get("version") || "";
-const entry = q.get("entry") || "index.html";
+const entry = q.get("entry") || "index";
 const token = q.get("launch_token") || "";
 const authToken = localStorage.getItem("token");
 const returnTo = q.get("return") || "";
@@ -47,7 +47,7 @@ try{
 titleEl.textContent = project;
 info.textContent = `Version ${version}`;
 if (authToken) {
-  document.cookie = `auth_token=${encodeURIComponent(authToken)}; path=/games; max-age=300; SameSite=Lax`;
+  document.cookie = `auth_token=${encodeURIComponent(authToken)}; path=/api; max-age=300; SameSite=Lax`;
 }
 // Load game iframe (keep token for in-game verification if needed)
 const params = new URLSearchParams();
@@ -72,7 +72,7 @@ const postFullscreenState = () => {
   }, "*");
 };
 if(fullscreenFrame){
-  fullscreenFrame.src = "/partials/fullscreen-button.html";
+  fullscreenFrame.src = "/partials/fullscreen-button";
   fullscreenFrame.addEventListener("load", () => {
     fullscreenFrame.contentWindow?.postMessage({
       type: "fullscreen:enabled",
@@ -170,7 +170,13 @@ function buildStorageSyncScript(storageproject, storageVersion){
       const project = ${JSON.stringify(storageproject)};
       const version = ${JSON.stringify(storageVersion)};
       const base = \`/api/storage/\${encodeURIComponent(project)}/\${encodeURIComponent(version)}\`;
-      const token = localStorage.getItem("token");
+      const tokenKey = "token";
+      const blockedKeys = new Set([tokenKey]);
+      const rawGet = window.localStorage.getItem.bind(window.localStorage);
+      const rawSet = window.localStorage.setItem.bind(window.localStorage);
+      const rawRemove = window.localStorage.removeItem.bind(window.localStorage);
+      try{ rawRemove(tokenKey); }catch(e){}
+      const token = null;
       const authHeader = token ? { Authorization: \`Bearer \${token}\` } : {};
       const ls = window.localStorage;
       const origSet = ls.setItem.bind(ls);
@@ -210,10 +216,12 @@ function buildStorageSyncScript(storageproject, storageVersion){
         }catch(e){}
       }
       ls.setItem = function(key, value){
+        if (blockedKeys.has(String(key))) return;
         origSet(String(key), String(value));
         queueSet(String(key), String(value));
       };
       ls.removeItem = function(key){
+        if (blockedKeys.has(String(key))) return;
         origRemove(String(key));
         fetch(\`\${base}/\${encodeURIComponent(String(key))}\`, {
           method: "DELETE",
@@ -226,6 +234,7 @@ function buildStorageSyncScript(storageproject, storageVersion){
         fetch(base, { method: "DELETE", headers: authHeader, credentials: "include" }).catch(() => {});
       };
       ls.getItem = function(key){
+        if (blockedKeys.has(String(key))) return "";
         return origGet(String(key));
       };
       loadRemote();

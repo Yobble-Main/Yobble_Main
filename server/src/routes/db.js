@@ -1,6 +1,6 @@
-import sqlite3 from "sqlite3";
+import { openDatabase } from "../sqlite-compat.js";
 
-export const db = new sqlite3.Database("benno111engene.sqlite");
+export const db = openDatabase("benno111engene.sqlite");
 
 /* -----------------------------
    DB helpers

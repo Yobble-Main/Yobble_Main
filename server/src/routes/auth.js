@@ -1,7 +1,7 @@
 import express from "express";
 import bcrypt from "bcryptjs";
 import { get, run } from "../db.js";
-import { requireAuth, requireAuthAllowBanned, signToken } from "../auth.js";
+import { getUserAuthState, requireAuth, requireAuthAllowBanned, signToken } from "../auth.js";
 import { buildTotpUri, generateTotpSecret, verifyTotp } from "../totp.js";
 
 export const authRouter = express.Router();
@@ -87,61 +87,31 @@ authRouter.post("/login", async (req, res) => {
     }
   }
 
-  const now = Date.now();
-  const permaBan = await get(
-    `SELECT reason, created_at
-     FROM bans
-     WHERE target_type='user' AND target_id=?
-       AND lifted_at IS NULL
-       AND expires_at IS NULL
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [user.id]
-  );
-  if (permaBan) {
-    const token = signToken(user);
+  const banState = await getUserAuthState(user);
+  const token = signToken(user);
+  if (banState.permaBan || (user.is_banned && banState.activeTempBan)) {
+    const ban = banState.permaBan || banState.activeTempBan;
     return res.status(403).json({
       error: "account_banned",
       token,
-      reason: permaBan.reason || user.ban_reason || "Account banned",
-      banned_at: user.banned_at || permaBan.created_at || null
+      reason: ban?.reason || user.ban_reason || "Account banned",
+      banned_at: user.banned_at || ban?.created_at || null
     });
   }
 
-  const tempBan = await get(
-    `SELECT reason, expires_at
-     FROM bans
-     WHERE target_type='user' AND target_id=?
-       AND lifted_at IS NULL
-       AND expires_at IS NOT NULL
-       AND expires_at > ?
-     ORDER BY created_at DESC
-     LIMIT 1`,
-    [user.id, now]
-  );
-  if (tempBan) {
-    const token = signToken(user);
+  if (banState.activeTempBan && !banState.hasOpenAppeal) {
     return res.status(403).json({
       error: "account_timed_out",
       token,
-      until: tempBan.expires_at,
-      reason: tempBan.reason || user.timeout_reason || "Temporary timeout"
+      until: banState.activeTempBan.expires_at,
+      reason: banState.activeTempBan.reason || user.timeout_reason || "Temporary timeout"
     });
   }
 
-  if (user.is_banned) {
-    await run(
-      `UPDATE users SET is_banned=0, ban_reason=NULL, banned_at=NULL WHERE id=?`,
-      [user.id]
-    );
-    user.is_banned = 0;
-    user.ban_reason = null;
-    user.banned_at = null;
-  }
-
-  if (user.timeout_until && now < user.timeout_until) {
+  if (user.timeout_until && user.timeout_until > banState.now) {
     return res.status(403).json({
       error: "account_timed_out",
+      token,
       reason: user.timeout_reason || "Temporary timeout",
       until: user.timeout_until
     });
@@ -156,7 +126,6 @@ authRouter.post("/login", async (req, res) => {
     banned_at: user.banned_at || null
   };
 
-  const token = signToken(user);
   res.json({ token, user: payload });
 });
 

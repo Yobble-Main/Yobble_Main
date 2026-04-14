@@ -60,6 +60,7 @@ export async function mountShell(activeId){
     nav.appendChild(navLink("/mod/accounts","Accounts","modaccounts",activeId));
     nav.appendChild(navLink("/mod/appeals","Appeals","modappeals",activeId));
     nav.appendChild(navLink("/mod/audit","Audit Log","modaudit",activeId));
+    nav.appendChild(navLink("/mod/ai","AI","modai",activeId));
   }
   document.querySelector("#logoutBtn").onclick = logout;
 }

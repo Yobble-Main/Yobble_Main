@@ -2,7 +2,7 @@ import { api } from "./api.js";
 export async function requireAuth(){
   const token = localStorage.getItem("token");
   if(!token){
-    location.href = "/login.html";
+    location.href = "/login";
     throw new Error("no token");
   }
   try{
@@ -26,7 +26,7 @@ export async function requireAuth(){
 export async function requireAuthAllowBanned(){
   const token = localStorage.getItem("token");
   if(!token){
-    location.href = "/login.html";
+    location.href = "/login";
     throw new Error("no token");
   }
   try{
@@ -43,5 +43,52 @@ export async function logout(){
     await api.post("/api/auth/logout", {});
   }catch{}
   localStorage.removeItem("token");
-  location.href = "/login.html";
+  localStorage.removeItem("username");
+  localStorage.removeItem("role");
+  location.href = "/login";
+}
+
+export async function requireLogin(){
+  return requireAuth();
+}
+
+export async function requireLoginOrRedirect(){
+  return requireAuth();
+}
+
+export async function login(username, password, extras = {}){
+  const payload = {
+    username: String(username || "").trim(),
+    password: String(password || ""),
+    ...extras
+  };
+  const data = await api.post("/api/auth/login", payload);
+  if (data?.token) {
+    localStorage.setItem("token", data.token);
+  }
+  if (data?.user?.username) {
+    localStorage.setItem("username", data.user.username);
+  }
+  if (data?.user?.role) {
+    localStorage.setItem("role", data.user.role);
+  }
+  return data;
+}
+
+export async function register(username, email, password){
+  const payload = {
+    username: String(username || "").trim(),
+    password: String(password || "")
+  };
+  const data = await api.post("/api/auth/register", payload);
+  if (data?.token) {
+    localStorage.setItem("token", data.token);
+  }
+  if (data?.user?.username) {
+    localStorage.setItem("username", data.user.username);
+  }
+  if (data?.user?.role) {
+    localStorage.setItem("role", data.user.role);
+  }
+  return data;
 }

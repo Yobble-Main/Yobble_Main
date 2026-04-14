@@ -1,10 +1,10 @@
-import sqlite3 from "sqlite3";
+import { openDatabase } from "./sqlite-compat.js";
 import crypto from "crypto";
 
 /* -----------------------------
    DB connection
 ------------------------------ */
-export const db = new sqlite3.Database("../save/db");
+export const db = openDatabase("../save/db");
 
 /* IMPORTANT: enable foreign keys */
 db.serialize(() => {
@@ -158,10 +158,61 @@ export async function initDb() {
   await addColumnIfMissing("users", "platform_score", "INTEGER DEFAULT 0");
   await addColumnIfMissing("users", "totp_secret", "TEXT");
   await addColumnIfMissing("users", "totp_enabled", "INTEGER DEFAULT 0");
+  await addColumnIfMissing("users", "email", "TEXT");
   await addColumnIfMissing("users", "delete_requested_at", "INTEGER");
   await addColumnIfMissing("users", "delete_at", "INTEGER");
   await addColumnIfMissing("users", "deleted_at", "INTEGER");
   await addColumnIfMissing("users", "deleted_reason", "TEXT");
+
+  /* BANS */
+  await run(`CREATE TABLE IF NOT EXISTS bans(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    lifted_at INTEGER,
+    lift_reason TEXT
+  )`);
+  await addColumnIfMissing("bans", "expires_at", "INTEGER");
+  await addColumnIfMissing("bans", "lifted_at", "INTEGER");
+  await addColumnIfMissing("bans", "lift_reason", "TEXT");
+
+  await run(`CREATE TABLE IF NOT EXISTS ban_appeals(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ban_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    message TEXT,
+    created_at INTEGER NOT NULL,
+    decided_by INTEGER,
+    decided_at INTEGER,
+    decision_note TEXT,
+    FOREIGN KEY(ban_id) REFERENCES bans(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(decided_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("ban_appeals", "decided_by", "INTEGER");
+  await addColumnIfMissing("ban_appeals", "decided_at", "INTEGER");
+  await addColumnIfMissing("ban_appeals", "decision_note", "TEXT");
+
+  /* GIFT CODES */
+  await run(`CREATE TABLE IF NOT EXISTS gift_codes(
+    code TEXT PRIMARY KEY,
+    amount INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    created_by INTEGER,
+    redeemed_at INTEGER,
+    redeemed_by INTEGER,
+    expires_at INTEGER,
+    FOREIGN KEY(created_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY(redeemed_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("gift_codes", "created_by", "INTEGER");
+  await addColumnIfMissing("gift_codes", "redeemed_at", "INTEGER");
+  await addColumnIfMissing("gift_codes", "redeemed_by", "INTEGER");
+  await addColumnIfMissing("gift_codes", "expires_at", "INTEGER");
 
   /* PROFILES */
   await run(`CREATE TABLE IF NOT EXISTS profiles(
@@ -224,6 +275,7 @@ export async function initDb() {
   await addColumnIfMissing("games", "banner_path", "TEXT");
   await addColumnIfMissing("games", "screenshots_json", "TEXT");
   await addColumnIfMissing("games", "custom_levels_enabled", "INTEGER DEFAULT 1");
+  await addColumnIfMissing("games", "created_at", "INTEGER");
 
   /* GAME VERSIONS */
   await run(`CREATE TABLE IF NOT EXISTS game_versions(
@@ -236,6 +288,43 @@ export async function initDb() {
     is_published INTEGER NOT NULL DEFAULT 0,
     UNIQUE(game_id, version),
     FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("game_versions", "approval_status", "TEXT DEFAULT 'pending'");
+  await addColumnIfMissing("game_versions", "approved_by", "INTEGER");
+  await addColumnIfMissing("game_versions", "approved_at", "INTEGER");
+  await addColumnIfMissing("game_versions", "rejected_reason", "TEXT");
+
+  await run(`CREATE TABLE IF NOT EXISTS game_uploads(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    uploader_user_id INTEGER NOT NULL,
+    game_id INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(uploader_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+  )`);
+
+  await run(
+    `UPDATE games
+     SET owner_user_id = (
+       SELECT uploader_user_id
+       FROM game_uploads gu
+       WHERE gu.game_id = games.id
+       ORDER BY gu.created_at ASC
+       LIMIT 1
+     )
+     WHERE owner_user_id IS NULL`
+  );
+
+  await run(`CREATE TABLE IF NOT EXISTS game_version_whitelist(
+    game_id INTEGER NOT NULL,
+    version TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    UNIQUE(game_id, version, user_id),
+    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
 
   /* BLOG POSTS */
@@ -287,6 +376,272 @@ export async function initDb() {
   await addColumnIfMissing("items", "approved_at", "INTEGER");
   await addColumnIfMissing("items", "rejected_reason", "TEXT");
   await addColumnIfMissing("items", "created_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS inventory(
+    user_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    qty INTEGER NOT NULL,
+    UNIQUE(user_id, item_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS friends(
+    user_id INTEGER NOT NULL,
+    friend_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(user_id, friend_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(friend_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS wallets(
+    user_id INTEGER PRIMARY KEY,
+    balance INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("wallets", "updated_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS wallet_transactions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    amount INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    ref_type TEXT,
+    ref_id INTEGER,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("wallet_transactions", "ref_type", "TEXT");
+  await addColumnIfMissing("wallet_transactions", "ref_id", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS currency_transactions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    delta INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    meta_json TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("currency_transactions", "meta_json", "TEXT");
+
+  await run(`CREATE TABLE IF NOT EXISTS marketplace(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    qty INTEGER NOT NULL,
+    price INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS marketplace_listings(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    seller_user_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    qty INTEGER NOT NULL,
+    price_each INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(seller_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("marketplace_listings", "status", "TEXT DEFAULT 'active'");
+  await addColumnIfMissing("marketplace_listings", "updated_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS marketplace_auto_stock(
+    seller_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    qty_remaining INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(seller_id, item_id),
+    FOREIGN KEY(seller_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS launcher_tokens(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL,
+    game_project TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    used_by TEXT,
+    ip_hint TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("launcher_tokens", "used_at", "INTEGER");
+  await addColumnIfMissing("launcher_tokens", "used_by", "TEXT");
+  await addColumnIfMissing("launcher_tokens", "ip_hint", "TEXT");
+
+  await run(`CREATE TABLE IF NOT EXISTS game_reviews(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    rating INTEGER NOT NULL,
+    comment TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(game_id, user_id),
+    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("game_reviews", "comment", "TEXT");
+  await addColumnIfMissing("game_reviews", "updated_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS game_playtime(
+    user_id INTEGER NOT NULL,
+    game_id INTEGER NOT NULL,
+    playtime_ms INTEGER NOT NULL DEFAULT 0,
+    sessions INTEGER NOT NULL DEFAULT 0,
+    last_played INTEGER,
+    UNIQUE(user_id, game_id),
+    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("game_playtime", "sessions", "INTEGER NOT NULL DEFAULT 0");
+  await addColumnIfMissing("game_playtime", "last_played", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS user_library(
+    user_id INTEGER NOT NULL,
+    game_id INTEGER NOT NULL,
+    added_at INTEGER NOT NULL,
+    UNIQUE(user_id, game_id),
+    FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS notifications(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT,
+    title TEXT,
+    body TEXT,
+    link TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("notifications", "is_read", "INTEGER DEFAULT 0");
+
+  await run(`CREATE TABLE IF NOT EXISTS reports(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reporter_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
+    category TEXT,
+    message TEXT NOT NULL,
+    status TEXT DEFAULT 'open',
+    created_at INTEGER NOT NULL,
+    resolved_by INTEGER,
+    resolved_at INTEGER,
+    resolution_note TEXT,
+    FOREIGN KEY(reporter_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(resolved_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("reports", "status", "TEXT DEFAULT 'open'");
+  await addColumnIfMissing("reports", "resolved_by", "INTEGER");
+  await addColumnIfMissing("reports", "resolved_at", "INTEGER");
+  await addColumnIfMissing("reports", "resolution_note", "TEXT");
+  await addColumnIfMissing("reports", "ai_priority", "TEXT");
+  await addColumnIfMissing("reports", "ai_action", "TEXT");
+  await addColumnIfMissing("reports", "ai_note", "TEXT");
+  await addColumnIfMissing("reports", "ai_reviewed_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS report_evidence(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id INTEGER NOT NULL,
+    filename TEXT,
+    stored_path TEXT NOT NULL,
+    uploaded_at INTEGER NOT NULL,
+    FOREIGN KEY(report_id) REFERENCES reports(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS stats(
+    user_id INTEGER PRIMARY KEY,
+    playtime_seconds INTEGER NOT NULL DEFAULT 0,
+    matches_played INTEGER NOT NULL DEFAULT 0,
+    wins INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("stats", "matches_played", "INTEGER NOT NULL DEFAULT 0");
+  await addColumnIfMissing("stats", "wins", "INTEGER NOT NULL DEFAULT 0");
+
+  await run(`CREATE TABLE IF NOT EXISTS game_editor_projects(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS trades(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_user INTEGER NOT NULL,
+    to_user INTEGER NOT NULL,
+    from_currency INTEGER NOT NULL DEFAULT 0,
+    to_currency INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER,
+    FOREIGN KEY(from_user) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(to_user) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS trade_items(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    qty INTEGER NOT NULL,
+    FOREIGN KEY(trade_id) REFERENCES trades(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(item_id) REFERENCES items(id) ON DELETE CASCADE
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS trade_offers(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER
+  )`);
+
+  await run(`CREATE TABLE IF NOT EXISTS support_tickets(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_number TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL,
+    subject TEXT NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT DEFAULT 'general',
+    priority TEXT DEFAULT 'medium',
+    status TEXT DEFAULT 'open',
+    assigned_to INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER,
+    closed_at INTEGER,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(assigned_to) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("support_tickets", "assigned_to", "INTEGER");
+  await addColumnIfMissing("support_tickets", "updated_at", "INTEGER");
+  await addColumnIfMissing("support_tickets", "closed_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS support_messages(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    message TEXT NOT NULL,
+    is_staff_reply INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY(ticket_id) REFERENCES support_tickets(id) ON DELETE CASCADE,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+  await addColumnIfMissing("support_messages", "is_staff_reply", "INTEGER DEFAULT 0");
 
   // Remove legacy items without uploader info (and any related records).
   await run("DELETE FROM items WHERE uploaded_by IS NULL");
@@ -438,6 +793,43 @@ export async function initDb() {
   )`);
   await addColumnIfMissing("changelog_entries", "status", "TEXT DEFAULT 'published'");
   await addColumnIfMissing("changelog_entries", "updated_at", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS roadmap_entries(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    created_by TEXT,
+    status TEXT DEFAULT 'published',
+    updated_at INTEGER,
+    sort_order INTEGER DEFAULT 0
+  )`);
+  await addColumnIfMissing("roadmap_entries", "status", "TEXT DEFAULT 'published'");
+  await addColumnIfMissing("roadmap_entries", "updated_at", "INTEGER");
+  await addColumnIfMissing("roadmap_entries", "sort_order", "INTEGER DEFAULT 0");
+
+  await run(`CREATE TABLE IF NOT EXISTS ai_mod_settings(
+    key TEXT PRIMARY KEY,
+    value TEXT,
+    updated_at INTEGER NOT NULL,
+    updated_by INTEGER,
+    FOREIGN KEY(updated_by) REFERENCES users(id) ON DELETE SET NULL
+  )`);
+  await addColumnIfMissing("ai_mod_settings", "updated_by", "INTEGER");
+
+  await run(`CREATE TABLE IF NOT EXISTS ai_mod_dependencies(
+    name TEXT PRIMARY KEY,
+    kind TEXT NOT NULL DEFAULT 'service',
+    status TEXT NOT NULL DEFAULT 'unknown',
+    version TEXT,
+    details TEXT,
+    updated_at INTEGER NOT NULL
+  )`);
+  await addColumnIfMissing("ai_mod_dependencies", "kind", "TEXT NOT NULL DEFAULT 'service'");
+  await addColumnIfMissing("ai_mod_dependencies", "status", "TEXT NOT NULL DEFAULT 'unknown'");
+  await addColumnIfMissing("ai_mod_dependencies", "version", "TEXT");
+  await addColumnIfMissing("ai_mod_dependencies", "details", "TEXT");
+  await addColumnIfMissing("ai_mod_dependencies", "updated_at", "INTEGER");
 
   console.log("[DB] schema ready");
 }

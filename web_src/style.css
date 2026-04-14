@@ -64,7 +64,7 @@ nav a.active{color:var(--accent);opacity:1}
   .navLabel-abbr{display:none}
   .navLabel-emoji{display:inline}
 }
-main{max-width:1240px;margin:28px auto;padding:0 20px}
+main{max-width:1240px;margin:28px auto 0;padding:0 20px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
 .item-media,
@@ -307,7 +307,7 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
   #mainNav a{white-space:nowrap;padding:6px 8px;border-radius:8px}
   body.nav-open #mainNav{display:flex}
   #walletBalance{margin-left:0;order:3}
-  main{margin:16px auto;padding:0 14px}
+  main{margin:16px auto 0;padding:0 14px}
   .grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
   .card{padding:16px}
   .dropdown{right:12px;left:12px;width:auto}

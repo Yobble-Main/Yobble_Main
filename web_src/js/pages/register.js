@@ -25,7 +25,9 @@ async function registerAccount(){
     const r = await api.post("/api/auth/register", { username:u.value, password:p.value });
     if(!r.token) throw new Error("no token");
     localStorage.setItem("token", r.token);
-    location.href = "/games.html";
+    if (r.user?.username) localStorage.setItem("username", r.user.username);
+    if (r.user?.role) localStorage.setItem("role", r.user.role);
+    location.href = "/games";
   }catch(e){
     if (typeof e === "string") {
       err.textContent = e;

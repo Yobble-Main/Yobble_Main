@@ -27,6 +27,8 @@ import { customLevelsRouter } from "./custom-levels.js";
 import { createChatRouter } from "./chat.js";
 import { gameEditorRouter } from "./gameeditor.js";
 import { changelogRouter } from "./changelog.js";
+import { roadmapRouter } from "./roadmap.js";
+import { gitInfoRouter } from "./git-info.js";
 
 export {
   authRouter,
@@ -52,5 +54,7 @@ export {
   customLevelsRouter,
   createChatRouter,
   gameEditorRouter,
-  changelogRouter
+  changelogRouter,
+  roadmapRouter,
+  gitInfoRouter
 };

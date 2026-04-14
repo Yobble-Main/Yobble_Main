@@ -29,6 +29,12 @@ export async function api(url, opts = {}){
   if (data?.token) {
     localStorage.setItem("token", data.token);
   }
+  if (data?.user?.username) {
+    localStorage.setItem("username", data.user.username);
+  }
+  if (data?.user?.role) {
+    localStorage.setItem("role", data.user.role);
+  }
   if (!res.ok) {
     const msg = typeof data === "string" ? data : (data?.error || res.statusText);
     const err = new Error(msg || "Request failed");
@@ -42,3 +48,20 @@ api.get = (url, opts) => api(url, { ...(opts || {}), method: "GET" });
 api.post = (url, body, opts) => api(url, { ...(opts || {}), method: "POST", body });
 api.put = (url, body, opts) => api(url, { ...(opts || {}), method: "PUT", body });
 api.del = (url, opts) => api(url, { ...(opts || {}), method: "DELETE" });
+
+export const API = "/api";
+
+export function getToken(){
+  return localStorage.getItem("token") || "";
+}
+
+export async function getUser(){
+  const token = getToken();
+  if(!token) return null;
+  try{
+    const data = await api.get("/api/auth/me");
+    return data?.user || data || null;
+  }catch{
+    return null;
+  }
+}

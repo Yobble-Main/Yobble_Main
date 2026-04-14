@@ -1,0 +1,5 @@
+/server/node_modules
+/temp/
+/save/
+/server/package-lock.json
+/server-maintnance/node_modules

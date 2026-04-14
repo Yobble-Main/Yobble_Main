@@ -6,10 +6,178 @@ import multer from "multer";
 import crypto from "crypto";
 import { all, get, run } from "../db.js";
 import { requireAuth, verifyToken } from "../auth.js";
+import { moderateText, ModerationSeverity } from "../ai-moderation.js";
 
 const DEFAULT_ROOMS = [];
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_ATTACHMENTS = 5;
+const BAD_WORDS = [
+  "asshole",
+  "bastard",
+  "bitch",
+  "bullshit",
+  "crap",
+  "cunt",
+  "damn",
+  "dick",
+  "fuck",
+  "motherfucker",
+  "nigga",
+  "nigger",
+  "piss",
+  "prick",
+  "shit",
+  "slut",
+  "twat",
+  "wanker"
+];
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const badWordPattern = new RegExp(
+  `\\b(${BAD_WORDS.map(escapeRegExp).join("|")})\\b`,
+  "gi"
+);
+const chatBroadcasters = new Set();
+let chatSweepStarted = false;
+
+function broadcastChatMessage(channelId, message) {
+  for (const broadcast of chatBroadcasters) {
+    try {
+      broadcast(channelId, message);
+    } catch (err) {
+      console.error("chat broadcast error", err);
+    }
+  }
+}
+
+function censorText(value) {
+  if (!value) return "";
+  return String(value).replace(badWordPattern, (match) => "*".repeat(match.length));
+}
+
+function hasBlockedWord(value) {
+  if (!value) return false;
+  badWordPattern.lastIndex = 0;
+  return badWordPattern.test(String(value));
+}
+
+export async function evaluateChatTextModeration(text) {
+  const normalized = String(text || "").trim();
+  const cleanResult = {
+    flagged: false,
+    severity: ModerationSeverity.NONE,
+    reason: "",
+    categories: []
+  };
+  if (!normalized) {
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult: cleanResult
+    };
+  }
+
+  if (hasBlockedWord(normalized)) {
+    return {
+      blocked: true,
+      reason: "blocked_word",
+      source: "word_filter",
+      aiResult: {
+        flagged: true,
+        severity: ModerationSeverity.MEDIUM,
+        reason: "blocked_word",
+        categories: ["profanity"]
+      }
+    };
+  }
+
+  try {
+    const aiResult = await moderateText(normalized);
+    if (aiResult.flagged && [ModerationSeverity.MEDIUM, ModerationSeverity.HIGH].includes(aiResult.severity)) {
+      return {
+        blocked: true,
+        reason: aiResult.reason || "content_policy",
+        source: "ai_moderation",
+        aiResult
+      };
+    }
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult
+    };
+  } catch (err) {
+    console.error("[ai-moderation] chat moderation failed:", err?.message);
+    return {
+      blocked: false,
+      reason: "",
+      source: null,
+      aiResult: cleanResult
+    };
+  }
+}
+
+export async function scanAndRemoveBadChatMessages({ channelUuid = null, limit = 500 } = {}) {
+  const cappedLimit = Math.max(1, Math.min(Number(limit) || 500, 5000));
+  const where = ["deleted = 0", "COALESCE(text, '') <> ''"];
+  const params = [];
+  if (channelUuid) {
+    where.push("channel_uuid = ?");
+    params.push(channelUuid);
+  }
+  params.push(cappedLimit);
+
+  const rows = await all(
+    `SELECT id, channel_uuid, user, text
+     FROM chat_messages
+     WHERE ${where.join(" AND ")}
+     ORDER BY id ASC
+     LIMIT ?`,
+    params
+  );
+
+  const removed = [];
+  for (const row of rows) {
+    const verdict = await evaluateChatTextModeration(row.text);
+    if (!verdict.blocked) continue;
+    await run("UPDATE chat_messages SET deleted = 1 WHERE id = ? AND deleted = 0", [row.id]);
+    broadcastChatMessage(row.channel_uuid, {
+      type: "message_deleted",
+      id: row.id,
+      channelId: row.channel_uuid
+    });
+    removed.push({
+      id: row.id,
+      channel_uuid: row.channel_uuid,
+      user: row.user,
+      source: verdict.source,
+      reason: verdict.reason || verdict.aiResult?.reason || "content_policy"
+    });
+  }
+
+  return {
+    scanned: rows.length,
+    removed
+  };
+}
+
+async function sweepAllChatMessages(batchSize = 500) {
+  let totalScanned = 0;
+  let totalRemoved = 0;
+  while (true) {
+    const result = await scanAndRemoveBadChatMessages({ limit: batchSize });
+    totalScanned += result.scanned;
+    totalRemoved += result.removed.length;
+    if (result.scanned < batchSize) {
+      return { totalScanned, totalRemoved };
+    }
+  }
+}
 
 function sanitizeRoom(name) {
   if (typeof name !== "string") return "";
@@ -167,6 +335,15 @@ function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+function resolvePathWithin(baseDir, unsafePath = "") {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(resolvedBase, "." + path.sep + unsafePath);
+  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    return null;
+  }
+  return resolvedTarget;
+}
+
 function createInviteToken() {
   return crypto.randomBytes(18).toString("hex");
 }
@@ -178,6 +355,21 @@ export function createChatRouter({ projectRoot }) {
   ensureDir(uploadDir);
 
   const upload = multer({ dest: uploadDir });
+
+  if (!chatSweepStarted) {
+    chatSweepStarted = true;
+    setTimeout(() => {
+      sweepAllChatMessages()
+        .then((result) => {
+          if (result.totalRemoved > 0) {
+            console.log(`[chat] removed ${result.totalRemoved} bad messages during startup sweep`);
+          }
+        })
+        .catch((err) => {
+          console.error("[chat] startup moderation sweep failed:", err);
+        });
+    }, 0);
+  }
 
   router.get("/rooms", requireAuth, async (req, res) => {
     const { username } = req.user;
@@ -258,6 +450,7 @@ export function createChatRouter({ projectRoot }) {
   router.get("/invites/:token", requireAuth, async (req, res) => {
     const { username } = req.user;
     const token = String(req.params.token || "").trim();
+    const previewOnly = ["1", "true", "yes"].includes(String(req.query.preview || "").toLowerCase());
     if (!token) return res.status(400).json({ error: "missing_token" });
 
     const row = await get(
@@ -272,11 +465,14 @@ export function createChatRouter({ projectRoot }) {
 
     const channelRow = await getChannelById(row.channel_uuid);
     if (!channelRow || channelRow.is_dm) {
-      return res.status(404).json({ error: "not_found" });
+      return res.status(410).json({ error: "room_unavailable" });
     }
-    await ensureChannelMember(channelRow.channel_uuid, username, Date.now());
+    if (!previewOnly) {
+      await ensureChannelMember(channelRow.channel_uuid, username, Date.now());
+    }
 
     res.json({
+      preview: previewOnly,
       channel: { id: channelRow.channel_uuid, name: channelRow.name }
     });
   });
@@ -392,11 +588,48 @@ export function createChatRouter({ projectRoot }) {
       if (!channelRow) return res.status(403).json({ error: "not_allowed" });
       channelName = channelRow.name;
     }
-    const text = String(req.body?.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
+    const rawText = String(req.body?.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
+    const text = censorText(rawText);
     const files = Array.isArray(req.files) ? req.files : [];
+    const moderation = text ? await evaluateChatTextModeration(text) : null;
     if (!text && !files.length) {
       return res.status(400).json({ error: "empty_message" });
     }
+    if (moderation?.blocked) {
+      return res.status(400).json({ error: "message_blocked", reason: moderation.reason || "content_policy" });
+    }
+
+    // AI content moderation (Gemini 2.0 Flash) — runs before storing the message.
+    if (text) {
+      try {
+        const aiResult = await moderateText(text);
+        if (aiResult.severity === ModerationSeverity.HIGH) {
+          // Zero-tolerance content: block immediately without storing.
+          return res.status(400).json({ error: "message_blocked", reason: "content_policy" });
+        }
+        if (aiResult.flagged && aiResult.severity === ModerationSeverity.MEDIUM) {
+          // Borderline content: allow through but create an automatic report so moderators can review.
+          try {
+            await run(
+              `INSERT INTO reports (reporter_id, target_type, target_ref, category, message, created_at)
+               VALUES (?, 'chat_message', ?, 'ai_moderation', ?, ?)`,
+              [
+                req.user.uid,
+                String(channelRow.channel_uuid),
+                `[AI] ${aiResult.reason || aiResult.categories.join(", ")}`,
+                Date.now(),
+              ]
+            );
+          } catch (reportErr) {
+            console.error("[ai-moderation] auto-report failed:", reportErr?.message);
+          }
+        }
+      } catch (aiErr) {
+        console.error("[ai-moderation] chat moderation failed:", aiErr?.message);
+        // Fail open — do not block the message when AI is unavailable.
+      }
+    }
+
     const ts = Date.now();
     try {
       const result = await run(
@@ -427,20 +660,47 @@ export function createChatRouter({ projectRoot }) {
           isVideo: mime.startsWith("video/")
         });
       }
-      return res.json({
-        message: {
-          id: messageId,
-          user: username,
-          text,
-          ts,
-          deleted: 0,
-          channel: channelName,
-          channelId: channelRow.channel_uuid,
-          attachments
-        }
-      });
+      const message = {
+        id: messageId,
+        user: username,
+        text,
+        ts,
+        deleted: 0,
+        channel: channelName,
+        channelId: channelRow.channel_uuid,
+        attachments
+      };
+      broadcastChatMessage(channelRow.channel_uuid, { type: "chat", ...message });
+      return res.json({ message });
     } catch (err) {
       console.error("chat send error", err);
+      return res.status(500).json({ error: "server_error" });
+    }
+  });
+
+  router.post("/messages/:id/delete", requireAuth, async (req, res) => {
+    const { username } = req.user;
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: "bad_request" });
+
+    try {
+      const message = await get(
+        "SELECT id, user, channel_uuid, deleted FROM chat_messages WHERE id=?",
+        [id]
+      );
+      if (!message) return res.status(404).json({ error: "not_found" });
+      if (message.user !== username) return res.status(403).json({ error: "not_allowed" });
+      if (!message.deleted) {
+        await run("UPDATE chat_messages SET deleted=1 WHERE id=? AND user=?", [id, username]);
+      }
+      broadcastChatMessage(message.channel_uuid, {
+        type: "message_deleted",
+        id,
+        channelId: message.channel_uuid
+      });
+      return res.json({ ok: true, id });
+    } catch (err) {
+      console.error("chat delete message error", err);
       return res.status(500).json({ error: "server_error" });
     }
   });
@@ -454,7 +714,8 @@ export function createChatRouter({ projectRoot }) {
         [id]
       );
       if (!row) return res.status(404).json({ error: "not_found" });
-      const filePath = path.join(uploadDir, row.stored_name);
+      const filePath = resolvePathWithin(uploadDir, path.basename(row.stored_name || ""));
+      if (!filePath) return res.status(404).json({ error: "not_found" });
       return res.download(filePath, row.original_name);
     } catch (err) {
       console.error("chat download error", err);
@@ -473,8 +734,8 @@ export function createChatRouter({ projectRoot }) {
 
 function expressStatic(dir) {
   return function (req, res, next) {
-    const filePath = path.join(dir, decodeURIComponent(req.path || ""));
-    if (!filePath.startsWith(dir)) return res.status(403).send("forbidden");
+    const filePath = resolvePathWithin(dir, decodeURIComponent(req.path || ""));
+    if (!filePath) return res.status(403).send("forbidden");
     fs.stat(filePath, (err, stat) => {
       if (err || !stat.isFile()) return next();
       res.sendFile(filePath);
@@ -506,6 +767,10 @@ export function attachChatWs(server, { projectRoot }) {
       }
     });
   }
+  chatBroadcasters.add(broadcastToChannel);
+  wss.on("close", () => {
+    chatBroadcasters.delete(broadcastToChannel);
+  });
 
   wss.on("connection", async (ws, req) => {
     const url = new URL(req.url || "", "http://localhost");
@@ -578,8 +843,11 @@ export function attachChatWs(server, { projectRoot }) {
         return;
       }
       if (data.type !== "chat") return;
-      const text = String(data.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
+      const rawText = String(data.text || "").trim().slice(0, MAX_MESSAGE_LENGTH);
+      const text = censorText(rawText);
       if (!text) return;
+      const moderation = await evaluateChatTextModeration(text);
+      if (moderation.blocked) return;
       const ts = Date.now();
       try {
         const result = await run(

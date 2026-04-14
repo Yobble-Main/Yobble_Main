@@ -25,7 +25,7 @@ mediaRouter.post("/banner", requireAuth, requireRole("moderator"), upload.single
 
   const SERVER_DIR = path.resolve(process.cwd());
   const PROJECT_ROOT = path.resolve(SERVER_DIR, "..");
-  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 
   const mediaDir = path.join(GAME_STORAGE_DIR, project, "media");
   fs.mkdirSync(mediaDir, { recursive:true });
@@ -50,7 +50,7 @@ mediaRouter.post("/screenshot", requireAuth, requireRole("moderator"), upload.si
 
   const SERVER_DIR = path.resolve(process.cwd());
   const PROJECT_ROOT = path.resolve(SERVER_DIR, "..");
-  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 
   const mediaDir = path.join(GAME_STORAGE_DIR, project, "media");
   fs.mkdirSync(mediaDir, { recursive:true });

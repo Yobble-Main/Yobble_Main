@@ -2,11 +2,16 @@ import express from "express";
 import fs from "fs/promises";
 import fsSync from "fs";
 import https from "https";
+import http from "http";
 import path from "path";
+import os from "os";
 import { fileURLToPath } from "url";
+import { spawn } from "child_process";
 import unzipper from "unzipper";
 import { requireAuth, requireRole } from "../auth.js";
 import { all, get, run } from "../db.js";
+import { ensureTosFile } from "../tos.js";
+import { scanAndRemoveBadChatMessages } from "./chat.js";
 
 export const moderationRouter = express.Router();
 
@@ -14,7 +19,7 @@ const MOD_ROLES = ["admin", "mod", "moderator"];
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, "../../..");
-const TOS_PATH = path.join(PROJECT_ROOT, "tos.json");
+const TOS_PATH = path.join(PROJECT_ROOT, "save", "tos");
 const UPDATE_ZIP_URL = "https://github.com/Benno111/Yobble_Main/archive/refs/heads/main.zip";
 
 function readCookie(req, name) {
@@ -52,14 +57,33 @@ function downloadZip(url, destPath) {
   });
 }
 
+function resolvePathWithin(baseDir, unsafePath = "") {
+  const resolvedBase = path.resolve(baseDir);
+  const resolvedTarget = path.resolve(resolvedBase, "." + path.sep + unsafePath);
+  if (resolvedTarget !== resolvedBase && !resolvedTarget.startsWith(resolvedBase + path.sep)) {
+    return null;
+  }
+  return resolvedTarget;
+}
+
 async function extractZip(zipPath, extractDir) {
   await fs.mkdir(extractDir, { recursive: true });
-  await new Promise((resolve, reject) => {
-    fsSync.createReadStream(zipPath)
-      .pipe(unzipper.Extract({ path: extractDir }))
-      .on("close", resolve)
-      .on("error", reject);
-  });
+  const archive = await unzipper.Open.file(zipPath);
+  for (const entry of archive.files) {
+    const entryPath = String(entry.path || "").replace(/\\/g, "/");
+    if (!entryPath || entry.type === "Directory" || entryPath.endsWith("/")) continue;
+    const outputPath = resolvePathWithin(extractDir, entryPath);
+    if (!outputPath) {
+      throw new Error("unsafe_zip_entry");
+    }
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await new Promise((resolve, reject) => {
+      entry.stream()
+        .pipe(fsSync.createWriteStream(outputPath, { flags: "wx" }))
+        .on("finish", resolve)
+        .on("error", reject);
+    });
+  }
   const entries = await fs.readdir(extractDir, { withFileTypes: true });
   const rootDir = entries.find((entry) => entry.isDirectory());
   if (!rootDir) {
@@ -340,11 +364,10 @@ moderationRouter.post("/games/reject-ban", requireAuth, requireRole(...MOD_ROLES
 /* GET /api/mod/tos */
 moderationRouter.get("/tos", requireAuth, requireRole(...MOD_ROLES), async (_req, res) => {
   try{
-    const raw = await fs.readFile(TOS_PATH, "utf8");
-    const json = JSON.parse(raw);
-    res.json(json);
-  }catch{
-    res.json({});
+    res.json(await ensureTosFile(TOS_PATH));
+  }catch(err){
+    console.error("mod tos load error", err);
+    res.status(500).json({ error: "server_error" });
   }
 });
 
@@ -355,6 +378,7 @@ moderationRouter.put("/tos", requireAuth, requireRole(...MOD_ROLES), async (req,
   if (serialized.length > 200000) {
     return res.status(413).json({ error: "too_large" });
   }
+  await fs.mkdir(path.dirname(TOS_PATH), { recursive: true });
   await fs.writeFile(TOS_PATH, serialized + "\n", "utf8");
   res.json({ ok: true });
 });
@@ -529,6 +553,32 @@ moderationRouter.post("/chat/rooms/remove", requireAuth, requireRole(...MOD_ROLE
   res.json({ ok: true });
 });
 
+/* POST /api/mod/chat/messages/scan */
+moderationRouter.post("/chat/messages/scan", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
+  const ref = String(req.body?.room || req.body?.ref || "").trim();
+  const limit = Math.max(1, Math.min(Number(req.body?.limit) || 500, 5000));
+
+  let channelUuid = null;
+  if (ref) {
+    const room = await getChatRoomByRef(ref);
+    if (!room) return res.status(404).json({ error: "room_not_found" });
+    channelUuid = room.channel_uuid;
+  }
+
+  try {
+    const result = await scanAndRemoveBadChatMessages({ channelUuid, limit });
+    res.json({
+      ok: true,
+      scanned: result.scanned,
+      removed: result.removed.length,
+      messages: result.removed
+    });
+  } catch (err) {
+    console.error("mod chat scan failed:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+});
+
 /* GET /api/mod/search?q= */
 moderationRouter.get("/search", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
   const q = String(req.query.q || "").trim();
@@ -649,5 +699,374 @@ moderationRouter.post("/update", requireAuth, requireRole(...MOD_ROLES), async (
   } catch (err) {
     console.error("mod update failed:", err);
     res.status(500).json({ error: "update_failed" });
+  }
+});
+
+/* POST /api/mod/stop */
+moderationRouter.post("/stop", requireAuth, requireRole(...MOD_ROLES), async (_req, res) => {
+  res.json({ ok: true });
+  setTimeout(() => process.exit(0), 300);
+});
+
+/* ───────────────────────────────────────────────────────────
+   AI / OLLAMA ENDPOINTS
+─────────────────────────────────────────────────────────── */
+
+const OLLAMA_BASE = (process.env.OLLAMA_BASE_URL || "http://localhost:11434").replace(/\/$/, "");
+
+// In-memory install job state (one install at a time)
+const ollamaInstall = { running: false, done: false, error: null, log: [] };
+
+async function upsertAiDependency({
+  name,
+  kind = "service",
+  status = "unknown",
+  version = null,
+  details = null
+}) {
+  const now = Date.now();
+  await run(
+    `INSERT INTO ai_mod_dependencies(name, kind, status, version, details, updated_at)
+     VALUES(?,?,?,?,?,?)
+     ON CONFLICT(name) DO UPDATE SET
+       kind=excluded.kind,
+       status=excluded.status,
+       version=excluded.version,
+       details=excluded.details,
+       updated_at=excluded.updated_at`,
+    [name, kind, status, version, details, now]
+  );
+}
+
+async function upsertAiSetting(key, value, updatedBy = null) {
+  const now = Date.now();
+  await run(
+    `INSERT INTO ai_mod_settings(key, value, updated_at, updated_by)
+     VALUES(?,?,?,?)
+     ON CONFLICT(key) DO UPDATE SET
+       value=excluded.value,
+       updated_at=excluded.updated_at,
+       updated_by=excluded.updated_by`,
+    [key, value, now, updatedBy]
+  );
+}
+
+async function syncAiDependencies({ running, version, models }) {
+  await upsertAiDependency({
+    name: "ollama",
+    kind: "service",
+    status: running ? "ready" : "missing",
+    version: version || null,
+    details: JSON.stringify({ base_url: OLLAMA_BASE })
+  });
+
+  const modelNames = new Set();
+  for (const model of models || []) {
+    const name = String(model?.name || "").trim();
+    if (!name) continue;
+    modelNames.add(name);
+    await upsertAiDependency({
+      name: `model:${name}`,
+      kind: "model",
+      status: "ready",
+      version: null,
+      details: JSON.stringify({ size: model?.size ?? null })
+    });
+  }
+
+  const existingModels = await all(
+    `SELECT name FROM ai_mod_dependencies WHERE kind='model'`
+  );
+  for (const row of existingModels) {
+    const rawName = String(row.name || "");
+    const modelName = rawName.startsWith("model:") ? rawName.slice(6) : rawName;
+    if (modelNames.has(modelName)) continue;
+    await upsertAiDependency({
+      name: rawName,
+      kind: "model",
+      status: running ? "missing" : "unavailable",
+      version: null,
+      details: null
+    });
+  }
+}
+
+function ollamaFetch(urlPath, options = {}) {
+  return new Promise((resolve, reject) => {
+    const full = OLLAMA_BASE + urlPath;
+    const parsed = new URL(full);
+    const lib = parsed.protocol === "https:" ? https : http;
+    const reqOptions = {
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: options.method || "GET",
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    };
+    const req = lib.request(reqOptions, (res) => {
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode, body }));
+    });
+    req.on("error", reject);
+    if (options.body) req.write(options.body);
+    req.end();
+  });
+}
+
+function downloadFile(url, destPath) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith("https") ? https : http;
+    const request = lib.get(url, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        return resolve(downloadFile(res.headers.location, destPath));
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`download_failed:${res.statusCode}`));
+      }
+      const fileStream = fsSync.createWriteStream(destPath);
+      res.pipe(fileStream);
+      fileStream.on("finish", () => fileStream.close(resolve));
+      fileStream.on("error", reject);
+    });
+    request.on("error", reject);
+  });
+}
+
+async function runInstallOllama() {
+  ollamaInstall.running = true;
+  ollamaInstall.done = false;
+  ollamaInstall.error = null;
+  ollamaInstall.log = [];
+
+  const platform = os.platform();
+  ollamaInstall.log.push(`Detected platform: ${platform}`);
+
+  try {
+    if (platform === "win32") {
+      // Windows: download installer and run silently as current user — no UAC prompt
+      // Ollama's Windows installer (Inno Setup) installs to %LOCALAPPDATA%\Programs\Ollama
+      // by default, which does not require elevation.
+      const tmpDir = path.join(os.tmpdir(), `ollama-install-${Date.now()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+      const setupExe = path.join(tmpDir, "OllamaSetup.exe");
+
+      ollamaInstall.log.push("Downloading OllamaSetup.exe...");
+      await downloadFile("https://ollama.com/download/OllamaSetup.exe", setupExe);
+      ollamaInstall.log.push("Download complete. Running installer (silent, current user)...");
+
+      await new Promise((resolve, reject) => {
+        // /VERYSILENT /NORESTART — no UAC because Ollama defaults to per-user install
+        const proc = spawn(setupExe, ["/VERYSILENT", "/NORESTART"], {
+          detached: false,
+          windowsHide: true,
+        });
+        proc.stdout?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.stderr?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.on("close", (code) => {
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`installer exited with code ${code}`));
+        });
+        proc.on("error", reject);
+      });
+
+    } else if (platform === "linux") {
+      // Linux: run the official install script with OLLAMA_INSTALL_DIR set to a
+      // user-writable path (~/.local/bin) so no sudo/root access is required.
+      const homeDir = os.homedir();
+      const localBin = path.join(homeDir, ".local", "bin");
+      await fs.mkdir(localBin, { recursive: true });
+
+      // Download the install script to a temp file before executing it,
+      // rather than piping directly from curl, to avoid pipe-to-shell risks.
+      const tmpDir = path.join(os.tmpdir(), `ollama-install-${Date.now()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+      const scriptPath = path.join(tmpDir, "ollama-install.sh");
+
+      ollamaInstall.log.push("Downloading Ollama install script...");
+      await downloadFile("https://ollama.com/install.sh", scriptPath);
+      await fs.chmod(scriptPath, 0o700);
+      ollamaInstall.log.push("Running install script (user-local)...");
+
+      await new Promise((resolve, reject) => {
+        const proc = spawn("sh", [scriptPath], {
+          env: { ...process.env, OLLAMA_INSTALL_DIR: localBin },
+        });
+        proc.stdout?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.stderr?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.on("close", (code) => {
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`install script exited with code ${code}`));
+        });
+        proc.on("error", reject);
+      });
+
+    } else if (platform === "darwin") {
+      // macOS: Ollama ships as a native app — download the .zip containing Ollama.app
+      const homeDir = os.homedir();
+      const appsDir = path.join(homeDir, "Applications");
+      await fs.mkdir(appsDir, { recursive: true });
+
+      const tmpDir = path.join(os.tmpdir(), `ollama-install-${Date.now()}`);
+      await fs.mkdir(tmpDir, { recursive: true });
+      const zipPath = path.join(tmpDir, "Ollama.zip");
+
+      ollamaInstall.log.push("Downloading Ollama for macOS...");
+      await downloadFile("https://ollama.com/download/Ollama-darwin.zip", zipPath);
+      ollamaInstall.log.push("Extracting to ~/Applications...");
+
+      await new Promise((resolve, reject) => {
+        const proc = spawn("unzip", ["-o", zipPath, "-d", appsDir]);
+        proc.stdout?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.stderr?.on("data", (d) => ollamaInstall.log.push(d.toString().trim()));
+        proc.on("close", (code) => {
+          if (code === 0 || code === null) resolve();
+          else reject(new Error(`unzip exited with code ${code}`));
+        });
+        proc.on("error", reject);
+      });
+
+    } else {
+      throw new Error(`Unsupported platform: ${platform}`);
+    }
+
+    ollamaInstall.log.push("Install complete.");
+    ollamaInstall.done = true;
+  } catch (err) {
+    ollamaInstall.error = err.message || String(err);
+    ollamaInstall.log.push(`Error: ${ollamaInstall.error}`);
+  } finally {
+    ollamaInstall.running = false;
+    try {
+      await upsertAiDependency({
+        name: "ollama",
+        kind: "service",
+        status: ollamaInstall.done ? "installed" : (ollamaInstall.error ? "error" : "unknown"),
+        version: null,
+        details: JSON.stringify({
+          base_url: OLLAMA_BASE,
+          error: ollamaInstall.error || null
+        })
+      });
+    } catch (dbErr) {
+      console.error("ollama dependency db sync failed:", dbErr);
+    }
+  }
+}
+
+/* GET /api/mod/ai/status */
+moderationRouter.get("/ai/status", requireAuth, requireRole(...MOD_ROLES), async (_req, res) => {
+  let running = false;
+  let version = null;
+  let models = [];
+
+  try {
+    const r = await ollamaFetch("/api/version");
+    if (r.status === 200) {
+      running = true;
+      try { version = JSON.parse(r.body)?.version ?? null; } catch {}
+    }
+  } catch {}
+
+  if (running) {
+    try {
+      const r = await ollamaFetch("/api/tags");
+      if (r.status === 200) {
+        const data = JSON.parse(r.body);
+        models = (data?.models || []).map((m) => ({ name: m.name, size: m.size }));
+      }
+    } catch {}
+  }
+
+  await syncAiDependencies({ running, version, models });
+  const dependencies = await all(
+    `SELECT name, kind, status, version, details, updated_at
+     FROM ai_mod_dependencies
+     ORDER BY kind, name`
+  );
+  res.json({ running, version, models, install: { ...ollamaInstall }, dependencies });
+});
+
+/* POST /api/mod/ai/install */
+moderationRouter.post("/ai/install", requireAuth, requireRole(...MOD_ROLES), async (_req, res) => {
+  if (ollamaInstall.running) {
+    return res.status(409).json({ error: "install_already_running" });
+  }
+  // Reset state and kick off background install
+  ollamaInstall.done = false;
+  ollamaInstall.error = null;
+  ollamaInstall.log = [];
+  await upsertAiDependency({
+    name: "ollama",
+    kind: "service",
+    status: "installing",
+    version: null,
+    details: JSON.stringify({ base_url: OLLAMA_BASE })
+  });
+  runInstallOllama().catch(() => {});
+  res.json({ ok: true, message: "Install started." });
+});
+
+/* GET /api/mod/ai/install/status */
+moderationRouter.get("/ai/install/status", requireAuth, requireRole(...MOD_ROLES), (_req, res) => {
+  res.json({ ...ollamaInstall });
+});
+
+/* POST /api/mod/ai/pull */
+moderationRouter.post("/ai/pull", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
+  const model = String(req.body?.model || "gemma4:e2b").trim();
+  if (!model) return res.status(400).json({ error: "missing_model" });
+
+  try {
+    const r = await ollamaFetch("/api/pull", {
+      method: "POST",
+      body: JSON.stringify({ name: model, stream: false }),
+    });
+    if (r.status !== 200) {
+      return res.status(502).json({ error: "ollama_error", detail: r.body.slice(0, 500) });
+    }
+    await upsertAiDependency({
+      name: `model:${model}`,
+      kind: "model",
+      status: "ready",
+      version: null,
+      details: JSON.stringify({ source: "ollama_pull" })
+    });
+    await upsertAiSetting("ollama_model", model, req.user?.uid || null);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(503).json({ error: "ollama_unavailable", detail: err.message });
+  }
+});
+
+/* POST /api/mod/ai/chat */
+moderationRouter.post("/ai/chat", requireAuth, requireRole(...MOD_ROLES), async (req, res) => {
+  const model = String(req.body?.model || process.env.OLLAMA_MODEL || "gemma4:e2b").trim();
+  const messages = req.body?.messages;
+  if (!Array.isArray(messages) || !messages.length) {
+    return res.status(400).json({ error: "missing_messages" });
+  }
+
+  const safeMessages = messages.slice(-20).map((m) => ({
+    role: String(m.role || "user").slice(0, 20),
+    content: String(m.content || "").slice(0, 4000),
+  }));
+
+  try {
+    await upsertAiSetting("ollama_model", model, req.user?.uid || null);
+    const r = await ollamaFetch("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ model, stream: false, messages: safeMessages }),
+    });
+    if (r.status !== 200) {
+      return res.status(502).json({ error: "ollama_error", detail: r.body.slice(0, 500) });
+    }
+    const data = JSON.parse(r.body);
+    res.json({ ok: true, message: data?.message ?? null });
+  } catch (err) {
+    res.status(503).json({ error: "ollama_unavailable", detail: err.message });
   }
 });

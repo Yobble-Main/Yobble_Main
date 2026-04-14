@@ -57,9 +57,56 @@
       <button type="button" class="chat-modal__close" id="closeCreateRoomBtn" aria-label="Close">✕</button>
     </div>
     <div class="chat-modal__body">
-      <input id="newRoomInput" class="chat-rooms__input" type="text" placeholder="Create room">
+      <div class="chat-room-form__field">
+        <label class="chat-room-form__label" for="newRoomInput">Room name</label>
+        <input id="newRoomInput" class="chat-rooms__input" type="text" maxlength="32" placeholder="project-lab">
+        <div class="chat-room-form__hint">
+          <span id="newRoomPreview">#project-lab</span>
+          <span id="newRoomCount">0/32</span>
+        </div>
+      </div>
+
+      <div class="chat-room-form__grid">
+        <div class="chat-room-form__field">
+          <label class="chat-room-form__label" for="newRoomTopic">Topic</label>
+          <input id="newRoomTopic" class="chat-rooms__input" type="text" maxlength="80" placeholder="What is this room for?">
+        </div>
+        <div class="chat-room-form__field">
+          <label class="chat-room-form__label" for="newRoomVibe">Vibe</label>
+          <select id="newRoomVibe" class="chat-rooms__input">
+            <option value="Focused">Focused</option>
+            <option value="Casual">Casual</option>
+            <option value="Support">Support</option>
+            <option value="Announcements">Announcements</option>
+          </select>
+        </div>
+      </div>
+
+      <fieldset class="chat-room-form__fieldset">
+        <legend>Invite posture</legend>
+        <label class="chat-room-form__choice">
+          <input type="radio" name="newRoomVisibility" value="Invite-first" checked>
+          <span>Invite-first</span>
+        </label>
+        <label class="chat-room-form__choice">
+          <input type="radio" name="newRoomVisibility" value="Open discussion">
+          <span>Open discussion</span>
+        </label>
+      </fieldset>
+
+      <div class="chat-room-form__field">
+        <label class="chat-room-form__label" for="newRoomRules">Ground rules</label>
+        <textarea id="newRoomRules" class="chat-rooms__textarea" maxlength="180" placeholder="Keep it useful, friendly, and on topic."></textarea>
+      </div>
+
+      <label class="chat-room-form__choice chat-room-form__choice--wide">
+        <input id="newRoomWelcome" type="checkbox" checked>
+        <span>Post a starter note with these details</span>
+      </label>
+
       <div class="chat-modal__actions">
-        <button type="button" class="chat-rooms__create-btn" id="createRoomBtn">Add</button>
+        <button type="button" class="chat-modal__secondary" id="resetCreateRoomBtn">Reset</button>
+        <button type="button" class="chat-rooms__create-btn" id="createRoomBtn">Create room</button>
       </div>
     </div>
   </div>
@@ -95,6 +142,28 @@ let attachments = [];
 let typingTimeout = null;
 let manualClose = false;
 let roomRefreshTimer = null;
+let creatingRoom = false;
+
+const BAD_WORDS = [
+  "asshole",
+  "bastard",
+  "bitch",
+  "bullshit",
+  "crap",
+  "cunt",
+  "damn",
+  "dick",
+  "fuck",
+  "motherfucker",
+  "nigga",
+  "nigger",
+  "piss",
+  "prick",
+  "shit",
+  "slut",
+  "twat",
+  "wanker"
+];
 
 const chatMessages = document.getElementById("chatMessages");
 const chatInput = document.getElementById("chatInput");
@@ -116,13 +185,194 @@ const createRoomBtn = document.getElementById("createRoomBtn");
 const newRoomModal = document.getElementById("newRoomModal");
 const openCreateRoomBtn = document.getElementById("openCreateRoomBtn");
 const closeCreateRoomBtn = document.getElementById("closeCreateRoomBtn");
+const newRoomTopic = document.getElementById("newRoomTopic");
+const newRoomVibe = document.getElementById("newRoomVibe");
+const newRoomRules = document.getElementById("newRoomRules");
+const newRoomWelcome = document.getElementById("newRoomWelcome");
+const newRoomPreview = document.getElementById("newRoomPreview");
+const newRoomCount = document.getElementById("newRoomCount");
+const resetCreateRoomBtn = document.getElementById("resetCreateRoomBtn");
 
 if (!token) {
-  window.location.href = "/login.html";
+  window.location.href = "/login";
 }
 
 function authHeaders() {
   return { Authorization: "Bearer " + token };
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const badWordPattern = new RegExp(
+  `\\b(${BAD_WORDS.map(escapeRegExp).join("|")})\\b`,
+  "gi"
+);
+
+function censorText(value) {
+  if (!value) return "";
+  return String(value).replace(badWordPattern, (match) => "*".repeat(match.length));
+}
+
+function findInviteLink(text) {
+  const value = String(text || "");
+  const matches = value.match(/(?:https?:\/\/[^\s]+|\/chat\/index\?invite=[^\s]+)/g) || [];
+  for (const match of matches) {
+    try {
+      const url = new URL(match, location.origin);
+      if (url.origin === location.origin && url.pathname === "/chat/index" && url.searchParams.has("invite")) {
+        return {
+          token: url.searchParams.get("invite"),
+          url: url.toString()
+        };
+      }
+    } catch (e) {}
+  }
+  return null;
+}
+
+async function joinInvite(tokenValue) {
+  const tokenToJoin = String(tokenValue || "").trim();
+  if (!tokenToJoin) return false;
+  channelMeta.textContent = "Joining invite...";
+  try {
+    const res = await fetch(`/api/chat/invites/${encodeURIComponent(tokenToJoin)}`, { headers: authHeaders() });
+    const data = await readJson(res);
+    if (!res.ok) {
+      channelMeta.textContent = describeInviteError(res, data);
+      return false;
+    }
+    if (data?.channel?.id) {
+      currentChannelId = data.channel.id;
+      currentChannelName = data.channel.name;
+      await fetchRooms({ shouldSwitch: false });
+      switchChannel(data.channel.id);
+      channelMeta.textContent = "Joined invite.";
+      return true;
+    }
+    channelMeta.textContent = "Invite unavailable.";
+    return false;
+  } catch {
+    channelMeta.textContent = "Invite unavailable.";
+    return false;
+  }
+}
+
+async function readJson(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+function describeInviteError(res, data) {
+  if (data?.error === "expired") return "Invite expired.";
+  if (data?.error === "room_unavailable") return "Room unavailable.";
+  if (res?.status === 410) return "Invite unavailable.";
+  if (res?.status === 404) return "Invite not found.";
+  return "Invite unavailable.";
+}
+
+function setInviteCardUnavailable(card, titleEl, metaEl, joinBtn, message) {
+  const status = String(message || "This invite cannot be used anymore.");
+  card.classList.add("chat-invite-card--unavailable");
+  titleEl.textContent = status.toLowerCase().includes("expired")
+    ? "Invite expired"
+    : status.toLowerCase().includes("room")
+    ? "Room unavailable"
+    : "Invite unavailable";
+  metaEl.textContent = status;
+  joinBtn.disabled = true;
+  joinBtn.textContent = "Unavailable";
+}
+
+async function loadInvitePreview(invite, card, titleEl, metaEl, joinBtn) {
+  try {
+    const res = await fetch(`/api/chat/invites/${encodeURIComponent(invite.token)}?preview=1`, { headers: authHeaders() });
+    const data = await readJson(res);
+    if (!res.ok) {
+      const message = data?.error === "expired"
+        ? "This invite has expired."
+        : data?.error === "room_unavailable"
+        ? "This room no longer exists."
+        : "This invite is unavailable.";
+      setInviteCardUnavailable(card, titleEl, metaEl, joinBtn, message);
+      return;
+    }
+    if (data?.channel?.name) {
+      titleEl.textContent = "Invite to #" + data.channel.name;
+      metaEl.textContent = "Join #" + data.channel.name + " from this invite link.";
+      joinBtn.disabled = false;
+      joinBtn.textContent = "Join";
+      return;
+    }
+    setInviteCardUnavailable(card, titleEl, metaEl, joinBtn, "This invite is unavailable.");
+  } catch {
+    setInviteCardUnavailable(card, titleEl, metaEl, joinBtn, "This invite is unavailable.");
+  }
+}
+
+function createInviteCard(invite) {
+  const card = document.createElement("div");
+  card.className = "chat-invite-card";
+
+  const text = document.createElement("div");
+  text.className = "chat-invite-card__text";
+
+  const title = document.createElement("div");
+  title.className = "chat-invite-card__title";
+  title.textContent = "Room invite";
+
+  const meta = document.createElement("div");
+  meta.className = "chat-invite-card__meta";
+  meta.textContent = "Join this chat room from the invite link.";
+
+  text.appendChild(title);
+  text.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "chat-invite-card__actions";
+
+  const joinBtn = document.createElement("button");
+  joinBtn.type = "button";
+  joinBtn.className = "chat-invite-card__btn chat-invite-card__btn--primary";
+  joinBtn.textContent = "Checking...";
+  joinBtn.disabled = true;
+  joinBtn.addEventListener("click", async function () {
+    joinBtn.disabled = true;
+    joinBtn.textContent = "Joining...";
+    const joined = await joinInvite(invite.token);
+    if (joined) {
+      joinBtn.textContent = "Joined";
+      return;
+    }
+    if (!joined) {
+      setInviteCardUnavailable(card, title, meta, joinBtn, channelMeta.textContent);
+    }
+  });
+
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.className = "chat-invite-card__btn";
+  copyBtn.textContent = "Copy";
+  copyBtn.addEventListener("click", async function () {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(invite.url);
+      copyBtn.textContent = "Copied";
+      setTimeout(function () { copyBtn.textContent = "Copy"; }, 1200);
+    } else {
+      window.prompt("Copy invite link:", invite.url);
+    }
+  });
+
+  actions.appendChild(joinBtn);
+  actions.appendChild(copyBtn);
+  card.appendChild(text);
+  card.appendChild(actions);
+  loadInvitePreview(invite, card, title, meta, joinBtn);
+  return card;
 }
 
 async function fetchRooms(options) {
@@ -145,6 +395,10 @@ async function fetchRooms(options) {
     currentChannelName = rooms[0].name;
   }
   if (shouldSwitch) switchChannel(currentChannelId);
+}
+
+function isCompactChatLayout() {
+  return window.matchMedia("(max-width: 900px)").matches;
 }
 
 function startRoomRefresh() {
@@ -196,6 +450,9 @@ function switchChannel(roomId) {
   connectWS();
   renderRoomList();
   loadHistory(true);
+  if (isCompactChatLayout()) {
+    setSidebarCollapsed(true);
+  }
 }
 
 function connectWS() {
@@ -221,6 +478,8 @@ function connectWS() {
     try { data = JSON.parse(event.data); } catch (e) { return; }
     if (data.type === "chat") {
       addMessage(data);
+    } else if (data.type === "message_deleted") {
+      removeMessage(data.id);
     } else if (data.type === "typing") {
       showTyping(data.user);
     }
@@ -276,25 +535,40 @@ function createMessageElement(msg) {
   const timeSpan = document.createElement("span");
   timeSpan.className = "chat-msg-time";
   timeSpan.textContent = new Date(msg.ts || Date.now()).toLocaleTimeString();
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "chat-msg-delete";
+  deleteBtn.textContent = "Delete";
+  deleteBtn.addEventListener("click", function () {
+    deleteMessage(msg.id, deleteBtn);
+  });
   const reportBtn = document.createElement("button");
   reportBtn.type = "button";
   reportBtn.className = "chat-msg-report";
   reportBtn.textContent = "Report";
   reportBtn.addEventListener("click", function () {
     const ref = msg.id || "";
-    const url = `/report.html?target_type=chat_message&target_ref=${encodeURIComponent(ref)}`;
+    const url = `/report?target_type=chat_message&target_ref=${encodeURIComponent(ref)}`;
     window.location.href = url;
   });
   header.appendChild(userSpan);
   header.appendChild(timeSpan);
+  if (msg.user === username && !msg.deleted) {
+    header.appendChild(deleteBtn);
+  }
   header.appendChild(reportBtn);
 
   const body = document.createElement("div");
   body.className = "chat-msg-body";
-  body.textContent = msg.text || "";
+  body.textContent = censorText(msg.text || "");
 
   row.appendChild(header);
   row.appendChild(body);
+
+  const invite = findInviteLink(msg.text);
+  if (invite) {
+    row.appendChild(createInviteCard(invite));
+  }
 
   if (Array.isArray(msg.attachments) && msg.attachments.length) {
     const list = document.createElement("div");
@@ -320,6 +594,32 @@ function createMessageElement(msg) {
   return row;
 }
 
+function removeMessage(id) {
+  if (!id) return;
+  const row = Array.from(chatMessages.querySelectorAll(".chat-msg-row"))
+    .find((item) => item.dataset.id === String(id));
+  if (row) row.remove();
+}
+
+async function deleteMessage(id, button) {
+  if (!id) return;
+  if (!window.confirm("Delete this message?")) return;
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch(`${API.messages}/${encodeURIComponent(id)}/delete`, {
+      method: "POST",
+      headers: authHeaders()
+    });
+    if (!res.ok) {
+      if (button) button.disabled = false;
+      return;
+    }
+    removeMessage(id);
+  } catch {
+    if (button) button.disabled = false;
+  }
+}
+
 function prependMessage(msg) {
   const row = createMessageElement(msg);
   chatMessages.insertBefore(row, chatMessages.firstChild);
@@ -332,7 +632,7 @@ function addMessage(msg) {
 }
 
 async function sendMessage() {
-  const text = chatInput.value.trim();
+  const text = censorText(chatInput.value.trim());
   if (!text && !attachments.length) return;
   const form = new FormData();
   form.append("channel", currentChannelId);
@@ -389,6 +689,10 @@ function setSidebarCollapsed(collapsed) {
   sidebarToggleBtnHeader.textContent = collapsed ? "Rooms" : "Hide Rooms";
 }
 
+if (isCompactChatLayout()) {
+  setSidebarCollapsed(true);
+}
+
 sidebarToggleBtn.addEventListener("click", function () {
   setSidebarCollapsed(!chatRoot.classList.contains("chat-shell--collapsed"));
 });
@@ -396,9 +700,70 @@ sidebarToggleBtnHeader.addEventListener("click", function () {
   setSidebarCollapsed(!chatRoot.classList.contains("chat-shell--collapsed"));
 });
 
+function normalizeRoomName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function getRoomVisibility() {
+  const selected = document.querySelector("input[name='newRoomVisibility']:checked");
+  return selected ? selected.value : "Invite-first";
+}
+
+function buildRoomStarterNote(name) {
+  const topic = (newRoomTopic.value || "").trim();
+  const vibe = (newRoomVibe.value || "").trim();
+  const visibility = getRoomVisibility();
+  const rules = (newRoomRules.value || "").trim();
+  const lines = ["Welcome to #" + name + "."];
+  if (topic) lines.push("Topic: " + topic);
+  if (vibe) lines.push("Vibe: " + vibe);
+  if (visibility) lines.push("Invite posture: " + visibility);
+  if (rules) lines.push("Ground rules: " + rules);
+  return lines.join("\n");
+}
+
+async function postRoomStarterNote(channelId, text) {
+  if (!channelId || !text) return;
+  const form = new FormData();
+  form.append("channel", channelId);
+  form.append("text", text);
+  await fetch(API.messages, {
+    method: "POST",
+    headers: authHeaders(),
+    body: form
+  });
+}
+
+function updateCreateRoomPreview() {
+  const raw = newRoomInput.value || "";
+  const normalized = normalizeRoomName(raw);
+  newRoomPreview.textContent = normalized ? "#" + normalized : "#room-name";
+  newRoomCount.textContent = raw.length + "/32";
+  createRoomBtn.disabled = creatingRoom || !normalized;
+}
+
+function resetCreateRoomDialog() {
+  newRoomInput.value = "";
+  newRoomTopic.value = "";
+  newRoomVibe.value = "Focused";
+  newRoomRules.value = "";
+  newRoomWelcome.checked = true;
+  const inviteOnly = document.querySelector("input[name='newRoomVisibility'][value='Invite-first']");
+  if (inviteOnly) inviteOnly.checked = true;
+  updateCreateRoomPreview();
+}
+
 async function createRoom() {
-  const name = (newRoomInput.value || "").trim();
+  if (creatingRoom) return;
+  const name = normalizeRoomName(newRoomInput.value);
   if (!name) return;
+  creatingRoom = true;
   createRoomBtn.disabled = true;
   try {
     const res = await fetch(API.rooms, {
@@ -409,24 +774,37 @@ async function createRoom() {
     if (!res.ok) return;
     const data = await res.json();
     rooms = Array.isArray(data.rooms) ? data.rooms : rooms;
-    newRoomInput.value = "";
     renderRoomList();
-    if (data.created && data.created.id) switchChannel(data.created.id);
+    if (data.created && data.created.id) {
+      switchChannel(data.created.id);
+      if (newRoomWelcome.checked) {
+        try {
+          await postRoomStarterNote(data.created.id, buildRoomStarterNote(data.created.name || name));
+        } catch (e) {
+          channelMeta.textContent = "Room created. Starter note failed.";
+        }
+      }
+    }
+    resetCreateRoomDialog();
     newRoomModal.classList.remove("is-open");
   } finally {
-    createRoomBtn.disabled = false;
+    creatingRoom = false;
+    updateCreateRoomPreview();
   }
 }
 
 createRoomBtn.addEventListener("click", createRoom);
+newRoomInput.addEventListener("input", updateCreateRoomPreview);
 newRoomInput.addEventListener("keydown", function (e) {
   if (e.key === "Enter") {
     e.preventDefault();
     createRoom();
   }
 });
+resetCreateRoomBtn.addEventListener("click", resetCreateRoomDialog);
 openCreateRoomBtn.addEventListener("click", function () {
   newRoomModal.classList.add("is-open");
+  updateCreateRoomPreview();
   newRoomInput.focus();
 });
 closeCreateRoomBtn.addEventListener("click", function () {
@@ -452,7 +830,7 @@ inviteBtn.addEventListener("click", async function () {
       return;
     }
     const data = await res.json();
-    const url = `${location.origin}/chat/index.html?invite=${encodeURIComponent(data.token)}`;
+    const url = `${location.origin}/chat/index?invite=${encodeURIComponent(data.token)}`;
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(url);
       channelMeta.textContent = "Invite link copied.";
@@ -468,27 +846,38 @@ inviteBtn.addEventListener("click", async function () {
 reportRoomBtn.addEventListener("click", function () {
   if (!currentChannelId) return;
   const ref = reportRoomBtn.dataset.room || currentChannelId;
-  const url = `/report.html?target_type=chat_room&target_ref=${encodeURIComponent(ref)}`;
+  const url = `/report?target_type=chat_room&target_ref=${encodeURIComponent(ref)}`;
   window.location.href = url;
 });
 
 document.getElementById("logoutBtn").addEventListener("click", function () {
   localStorage.removeItem("token");
   localStorage.removeItem("username");
-  window.location.href = "/login.html";
+  window.location.href = "/login";
 });
 
 const inviteToken = new URLSearchParams(location.search).get("invite");
 if (inviteToken) {
-  fetch(`/api/chat/invites/${encodeURIComponent(inviteToken)}`, { headers: authHeaders() })
-    .then((res) => res.ok ? res.json() : null)
-    .then((data) => {
-      if (data?.channel?.id) {
+  (async function loadInviteFromUrl() {
+    let inviteStatus = "";
+    try {
+      const res = await fetch(`/api/chat/invites/${encodeURIComponent(inviteToken)}`, { headers: authHeaders() });
+      const data = await readJson(res);
+      if (!res.ok) {
+        inviteStatus = describeInviteError(res, data);
+      } else if (data?.channel?.id) {
         currentChannelId = data.channel.id;
         currentChannelName = data.channel.name;
+        inviteStatus = "Joined invite.";
       }
-    })
-    .finally(() => fetchRooms().finally(startRoomRefresh));
+    } catch {
+      inviteStatus = "Invite unavailable.";
+    } finally {
+      await fetchRooms();
+      if (inviteStatus) channelMeta.textContent = inviteStatus;
+      startRoomRefresh();
+    }
+  })();
 } else {
   fetchRooms().finally(startRoomRefresh);
 }

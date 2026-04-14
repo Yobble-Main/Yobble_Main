@@ -5,11 +5,16 @@ import path from "path";
 import fs from "fs";
 import http from "http";
 import https from "https";
-import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
+import { minify as terserMinify } from "terser";
+import CleanCSS from "clean-css";
+import { minify as htmlMinify } from "html-minifier-terser";
+import JavaScriptObfuscator from "javascript-obfuscator";
+import { openDatabase } from "./sqlite-compat.js";
 
 import { initDb, get, run, all } from "./db.js";
-import { requireAuth, verifyToken } from "./auth.js";
+import { getUserAuthState, requireAuth, verifyToken } from "./auth.js";
+import { ensureTosFile } from "./tos.js";
 
 // ⭐ Single import for all routers
 import {
@@ -36,7 +41,9 @@ import {
   customLevelsRouter,
   createChatRouter,
   gameEditorRouter,
-  changelogRouter
+  changelogRouter,
+  roadmapRouter,
+  gitInfoRouter
 } from "./routes/_routers.js";
 import { attachChatWs } from "./routes/chat.js";
 
@@ -64,7 +71,9 @@ const routerImports = [
   ["customLevelsRouter", customLevelsRouter],
   ["createChatRouter", createChatRouter],
   ["gameEditorRouter", gameEditorRouter],
-  ["changelogRouter", changelogRouter]
+  ["changelogRouter", changelogRouter],
+  ["roadmapRouter", roadmapRouter],
+  ["gitInfoRouter", gitInfoRouter]
 ];
 console.log("[Routers]", routerImports.map(([name, ref]) => `${name}:${ref ? "ok" : "missing"}`).join(" | "));
 
@@ -81,27 +90,541 @@ const WEB_SOURCE_DIR = fs.existsSync(path.join(PROJECT_ROOT, "web_src"))
   : (fs.existsSync(path.join(PROJECT_ROOT, "web_backup"))
       ? path.join(PROJECT_ROOT, "web_backup")
       : WEB_DIR);
-const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+const LEGACY_GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "game_storage");
+const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 const TOS_PATH = path.join(PROJECT_ROOT, "/save/tos");
 const ITEM_ICON_DIR = path.join(PROJECT_ROOT, "save", "item_icons");
 const TURBOWARP_EXTENSION_PATH = path.join(PROJECT_ROOT, "web_src", "turbowarp-extension.js");
 const CERT_DIR = path.join(PROJECT_ROOT, "Benno111 Chat");
 const CERT_PATH = path.join(CERT_DIR, "cert.pem");
 const KEY_PATH = path.join(CERT_DIR, "key.pem");
+const MINIFY_ID_PATH = path.join(PROJECT_ROOT, "temp-prep.json");
+let minifyIdState = null;
+const VARENV_ENABLED = ["1", "true", "yes", "on"].includes(
+  String(process.env.varenv || "false").toLowerCase()
+);
 
-function minifyText(text) {
-  const noBlock = text.replace(/\/\*[\s\S]*?\*\//g, "");
-  const noLine = noBlock.split("\n").map((line) => {
-    const idx = line.indexOf("//");
-    if (idx === -1) return line;
-    // Keep URLs like https://
-    if (idx > 0 && line[idx - 1] === ":") return line;
-    return line.slice(0, idx);
-  }).join(" ");
-  return noLine.replace(/\s+/g, " ").trim();
+function loadMinifyIdState() {
+  const fallback = { name: 123456 };
+  try {
+    if (!fs.existsSync(MINIFY_ID_PATH)) {
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(fallback, null, 2));
+      return fallback;
+    }
+    const raw = fs.readFileSync(MINIFY_ID_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.name !== "number") {
+      const merged = { ...(parsed && typeof parsed === "object" ? parsed : {}), ...fallback };
+      fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(merged, null, 2));
+      return fallback;
+    }
+    return { name: parsed.name };
+  } catch {
+    return fallback;
+  }
 }
 
-function minifyWebAssets(sourceDir, targetDir) {
+function saveMinifyIdState(state) {
+  try {
+    let existing = {};
+    try {
+      if (fs.existsSync(MINIFY_ID_PATH)) {
+        existing = JSON.parse(fs.readFileSync(MINIFY_ID_PATH, "utf8")) || {};
+      }
+    } catch {
+      existing = {};
+    }
+    const merged = { ...(existing && typeof existing === "object" ? existing : {}), name: state.name };
+    fs.writeFileSync(MINIFY_ID_PATH, JSON.stringify(merged, null, 2));
+  } catch {
+    // Best-effort only.
+  }
+}
+
+function stripLineCommentsPreserveUrls(text) {
+  return text.split("\n").map((line) => {
+    const idx = line.indexOf("//");
+    if (idx === -1) return line;
+    if (idx > 0 && line[idx - 1] === ":") return line;
+    return line.slice(0, idx);
+  }).join("\n");
+}
+
+function stripJsComments(text) {
+  let out = "";
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  let regexCharClass = false;
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        out += ch;
+        i += 1;
+        continue;
+      }
+      out += ch;
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      if (ch === "\n") {
+        out += "\n";
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      if (ch === "*" && next === "/") {
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === "[") regexCharClass = true;
+      if (ch === "]") regexCharClass = false;
+      if (ch === "/" && !regexCharClass) {
+        state = "normal";
+      }
+      i += 1;
+    }
+  }
+  return out;
+}
+
+function minifyJsFallback(text) {
+  const noComments = stripJsComments(text);
+  return noComments.replace(/\s+/g, " ").trim();
+}
+
+function collectJsDeclaredIdentifiers(text) {
+  const identifiers = new Set();
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+  const isIdent = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  const readIdent = () => {
+    let start = i;
+    i += 1;
+    while (i < text.length && isIdent(text[i])) i += 1;
+    return text.slice(start, i);
+  };
+
+  const skipSpace = () => {
+    while (i < text.length && /\s/.test(text[i])) i += 1;
+  };
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        i += 1;
+        continue;
+      }
+
+      if (isIdentStart(ch)) {
+        const word = readIdent();
+        if (word === "var" || word === "let" || word === "const") {
+          skipSpace();
+          while (i < text.length) {
+            if (text[i] === ";" || text[i] === "\n") break;
+            if (isIdentStart(text[i])) {
+              const name = readIdent();
+              identifiers.add(name);
+              skipSpace();
+              if (text[i] === "=") {
+                i += 1;
+                continue;
+              }
+              if (text[i] === ",") {
+                i += 1;
+                skipSpace();
+                continue;
+              }
+            } else {
+              i += 1;
+            }
+          }
+        }
+        if (word.length) prevNonSpace = word[word.length - 1];
+        continue;
+      }
+
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      if (ch === "\n") {
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      if (ch === "*" && next === "/") {
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "/") state = "normal";
+      i += 1;
+    }
+  }
+
+  return identifiers;
+}
+
+function renameJsIdentifiers(text, renameMap) {
+  let out = "";
+  let i = 0;
+  let state = "normal";
+  let quote = "";
+  let prevNonSpace = "";
+  let regexCharClass = false;
+  const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+  const isIdent = (ch) => /[A-Za-z0-9_$]/.test(ch);
+  const regexStarters = new Set("([{=:+-!*,?;|&~<>^%".split(""));
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "normal") {
+      if (ch === "/" && next === "/" && !(i > 0 && text[i - 1] === ":")) {
+        state = "line";
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        state = "block";
+        out += ch + next;
+        i += 2;
+        continue;
+      }
+      if (ch === "'" || ch === "\"" || ch === "`") {
+        state = "string";
+        quote = ch;
+        out += ch;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && (prevNonSpace === "" || regexStarters.has(prevNonSpace))) {
+        state = "regex";
+        out += ch;
+        i += 1;
+        continue;
+      }
+
+      if (isIdentStart(ch)) {
+        let start = i;
+        i += 1;
+        while (i < text.length && isIdent(text[i])) i += 1;
+        const word = text.slice(start, i);
+        out += renameMap[word] || word;
+        prevNonSpace = word[word.length - 1];
+        continue;
+      }
+
+      out += ch;
+      if (!/\s/.test(ch)) prevNonSpace = ch;
+      i += 1;
+      continue;
+    }
+
+    if (state === "line") {
+      out += ch;
+      if (ch === "\n") {
+        state = "normal";
+        prevNonSpace = "";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "block") {
+      out += ch;
+      if (ch === "*" && next === "/") {
+        out += next;
+        state = "normal";
+        i += 2;
+      } else {
+        i += 1;
+      }
+      continue;
+    }
+
+    if (state === "string") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === quote) {
+        state = "normal";
+      }
+      i += 1;
+      continue;
+    }
+
+    if (state === "regex") {
+      out += ch;
+      if (ch === "\\") {
+        out += next || "";
+        i += 2;
+        continue;
+      }
+      if (ch === "[") regexCharClass = true;
+      if (ch === "]") regexCharClass = false;
+      if (ch === "/" && !regexCharClass) {
+        state = "normal";
+      }
+      i += 1;
+    }
+  }
+
+  return out;
+}
+
+function obfuscateInlineJs(text, idState) {
+  const declared = collectJsDeclaredIdentifiers(text);
+  const renameMap = {};
+  for (const name of declared) {
+    if (!renameMap[name]) {
+      renameMap[name] = `var${idState.name}`;
+      idState.name += 1;
+    }
+  }
+  if (!Object.keys(renameMap).length) return text;
+  return renameJsIdentifiers(text, renameMap);
+}
+
+function minifyCssFallback(text) {
+  const noComments = stripLineCommentsPreserveUrls(
+    text.replace(/\/\*[\s\S]*?\*\//g, "")
+  );
+  return noComments
+    .replace(/\s+/g, " ")
+    .replace(/\s*([{}:;,>+~])\s*/g, "$1")
+    .replace(/;}/g, "}")
+    .trim();
+}
+
+function minifyHtmlFallback(text, idState) {
+  let html = text.replace(/<!--[\s\S]*?-->/g, "");
+
+  html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
+    const obfuscated = idState && VARENV_ENABLED ? obfuscateInlineJs(body, idState) : body;
+    const min = minifyJsFallback(obfuscated);
+    return `<script${attrs}>${min}</script>`;
+  });
+
+  html = html.replace(/<style\b([^>]*)>([\s\S]*?)<\/style>/gi, (match, attrs, body) => {
+    const min = minifyCssFallback(body);
+    return `<style${attrs}>${min}</style>`;
+  });
+
+  const noComments = stripLineCommentsPreserveUrls(html);
+  return noComments
+    .replace(/\s+/g, " ")
+    .replace(/>\s+</g, "><")
+    .replace(/\s*=\s*/g, "=")
+    .trim();
+}
+
+function looksLikeModuleJs(text) {
+  return /^\s*(import|export)\s/m.test(String(text || ""));
+}
+
+function obfuscateJsWithLibrary(text) {
+  return JavaScriptObfuscator.obfuscate(text, {
+    compact: true,
+    controlFlowFlattening: false,
+    deadCodeInjection: false,
+    disableConsoleOutput: false,
+    identifierNamesGenerator: "hexadecimal",
+    renameGlobals: false,
+    simplify: true,
+    splitStrings: false,
+    stringArray: true,
+    stringArrayRotate: true,
+    transformObjectKeys: false
+  }).getObfuscatedCode();
+}
+
+async function minifyJs(text, options = {}) {
+  const source = String(text || "");
+  const shouldObfuscate = Boolean(options.obfuscate) && !looksLikeModuleJs(source);
+  const prepared = shouldObfuscate ? obfuscateJsWithLibrary(source) : source;
+  try {
+    const result = await terserMinify(prepared, {
+      compress: {
+        passes: 2,
+        drop_debugger: true
+      },
+      format: {
+        comments: false
+      },
+      mangle: shouldObfuscate ? false : {
+        toplevel: !options.inline
+      },
+      module: Boolean(options.module)
+    });
+    return String(result?.code || "").trim() || minifyJsFallback(prepared);
+  } catch {
+    return minifyJsFallback(prepared);
+  }
+}
+
+async function minifyCss(text) {
+  try {
+    const result = new CleanCSS({
+      level: 2
+    }).minify(String(text || ""));
+    if (!result.errors?.length && result.styles) {
+      return result.styles.trim();
+    }
+  } catch {
+    // Fallback below.
+  }
+  return minifyCssFallback(text);
+}
+
+async function minifyHtml(text, idState) {
+  const source = String(text || "");
+  const processed = source.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, body) => {
+    const isModule = /\btype\s*=\s*["']module["']/i.test(attrs);
+    if (!idState || !VARENV_ENABLED || isModule) return match;
+    return `<script${attrs}>${obfuscateJsWithLibrary(body)}</script>`;
+  });
+  try {
+    return await htmlMinify(processed, {
+      collapseBooleanAttributes: true,
+      collapseWhitespace: true,
+      minifyCSS: (css) => minifyCssFallback(css),
+      minifyJS: (js) => minifyJsFallback(js),
+      removeAttributeQuotes: true,
+      removeComments: true,
+      removeEmptyAttributes: false,
+      sortAttributes: true,
+      sortClassName: true
+    });
+  } catch {
+    return minifyHtmlFallback(processed, idState);
+  }
+}
+
+async function minifyText(text, ext) {
+  if (ext === ".js") return minifyJs(text, { obfuscate: VARENV_ENABLED, module: looksLikeModuleJs(text) });
+  if (ext === ".css") return minifyCss(text);
+  if (ext === ".html") return minifyHtml(text, minifyIdState);
+  return text;
+}
+
+async function minifyWebAssets(sourceDir, targetDir) {
+  minifyIdState = loadMinifyIdState();
   if (!fs.existsSync(sourceDir)) {
     console.log(`[Minify] source missing: ${sourceDir}`);
     return;
@@ -128,7 +651,7 @@ function minifyWebAssets(sourceDir, targetDir) {
       const shouldBypassMinify = relPath.startsWith("js/pentapod/") || relPath.startsWith("ide/ui/");
       if ((ext === ".html" || ext === ".css" || ext === ".js") && !shouldBypassMinify) {
         const raw = fs.readFileSync(srcPath, "utf8");
-        const min = minifyText(raw);
+        const min = await minifyText(raw, ext);
         fs.writeFileSync(dstPath, min + "\n");
       } else {
         fs.copyFileSync(srcPath, dstPath);
@@ -140,6 +663,7 @@ function minifyWebAssets(sourceDir, targetDir) {
     }
   }
   console.log(`[Minify] done. processed ${fileCount} files.`);
+  saveMinifyIdState(minifyIdState);
 }
 
 function readCookie(req, name) {
@@ -192,6 +716,91 @@ function listFilesRecursive(baseDir, sub = "") {
   return out;
 }
 
+function escapeXml(value) {
+  return String(value ?? "").replace(/[<>&'"]/g, (char) => ({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;"
+  }[char]));
+}
+
+function buildSitemapXml(baseUrl) {
+  const now = new Date().toISOString();
+  const pages = [
+    { path: "/", changefreq: "daily", priority: "1.0" },
+    { path: "/games", changefreq: "daily", priority: "0.9" },
+    { path: "/game", changefreq: "daily", priority: "0.8" },
+    { path: "/blog", changefreq: "weekly", priority: "0.8" },
+    { path: "/blog-post", changefreq: "weekly", priority: "0.6" },
+    { path: "/changelog", changefreq: "weekly", priority: "0.8" },
+    { path: "/marketplace", changefreq: "daily", priority: "0.8" },
+    { path: "/market", changefreq: "daily", priority: "0.8" },
+    { path: "/download", changefreq: "monthly", priority: "0.7" },
+    { path: "/stats", changefreq: "weekly", priority: "0.6" },
+    { path: "/tos", changefreq: "yearly", priority: "0.4" },
+    { path: "/support", changefreq: "monthly", priority: "0.5" },
+    { path: "/sitemap", changefreq: "weekly", priority: "0.5" },
+    { path: "/version-info", changefreq: "daily", priority: "0.6" }
+  ];
+
+  const urls = pages.map((page) => `  <url>
+    <loc>${escapeXml(baseUrl + page.path)}</loc>
+    <lastmod>${now}</lastmod>
+    <changefreq>${page.changefreq}</changefreq>
+    <priority>${page.priority}</priority>
+  </url>`).join("\n");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+${urls}
+</urlset>
+`;
+}
+
+function moveDirectoryContents(sourceDir, targetDir) {
+  if (!fs.existsSync(sourceDir)) return;
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      moveDirectoryContents(sourcePath, targetPath);
+      const remaining = fs.readdirSync(sourcePath);
+      if (!remaining.length) {
+        fs.rmdirSync(sourcePath);
+      }
+      continue;
+    }
+
+    if (fs.existsSync(targetPath)) {
+      fs.rmSync(targetPath, { force: true });
+    }
+    fs.renameSync(sourcePath, targetPath);
+  }
+}
+
+function migrateLegacyGameStorage() {
+  if (!fs.existsSync(LEGACY_GAME_STORAGE_DIR)) {
+    fs.mkdirSync(GAME_STORAGE_DIR, { recursive: true });
+    return;
+  }
+
+  moveDirectoryContents(LEGACY_GAME_STORAGE_DIR, GAME_STORAGE_DIR);
+
+  try {
+    const remaining = fs.readdirSync(LEGACY_GAME_STORAGE_DIR);
+    if (!remaining.length) {
+      fs.rmdirSync(LEGACY_GAME_STORAGE_DIR);
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 const app = express();
 app.set("trust proxy", true);
 app.use(cors({
@@ -231,61 +840,19 @@ app.use(async (req, res, next) => {
   try {
     const decoded = verifyToken(token);
     const u = await get(
-      `SELECT id, is_banned, ban_reason, banned_at, timeout_until, timeout_reason
+      `SELECT id, username, role, is_banned, ban_reason, banned_at, timeout_until, timeout_reason,
+              delete_at, deleted_at
        FROM users WHERE id=?`,
       [decoded.uid]
     );
     if (!u) return next();
 
-    const now = Date.now();
-    const permaBan = await get(
-      `SELECT reason, created_at
-       FROM bans
-       WHERE target_type='user' AND target_id=?
-         AND lifted_at IS NULL
-         AND expires_at IS NULL
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [u.id]
-    );
-    let activeTempBan = null;
-    if (!permaBan) {
-      activeTempBan = await get(
-        `SELECT id, reason, created_at, expires_at
-         FROM bans
-         WHERE target_type='user' AND target_id=?
-           AND lifted_at IS NULL
-           AND expires_at IS NOT NULL
-           AND expires_at > ?
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [u.id, now]
-      );
-      if (!activeTempBan && u.is_banned) {
-        await run(
-          `UPDATE users
-           SET is_banned=0, ban_reason=NULL, banned_at=NULL
-           WHERE id=?`,
-          [u.id]
-        );
-        u.is_banned = 0;
-        u.ban_reason = null;
-        u.banned_at = null;
-      }
-    }
-
-    if (permaBan || (u.is_banned && activeTempBan)) {
+    const banState = await getUserAuthState(u);
+    if (banState.permaBan || (u.is_banned && banState.activeTempBan)) {
       return res.redirect("/Permanetly-Banned");
     }
-    if (activeTempBan || (u.timeout_until && u.timeout_until > now)) {
-      if (activeTempBan) {
-        const appeal = await get(
-          `SELECT id FROM ban_appeals WHERE ban_id=? AND status='open'`,
-          [activeTempBan.id]
-        );
-        if (appeal) return next();
-      }
-      const until = activeTempBan?.expires_at || u.timeout_until;
+    if ((banState.activeTempBan && !banState.hasOpenAppeal) || (u.timeout_until && u.timeout_until > banState.now)) {
+      const until = banState.activeTempBan?.expires_at || u.timeout_until;
       const qs = until ? `?until=${encodeURIComponent(until)}` : "";
       return res.redirect(`/temporay-banned${qs}`);
     }
@@ -321,6 +888,8 @@ app.use("/api/photon", photonRouter);
 app.use("/api/chat", createChatRouter({ projectRoot: PROJECT_ROOT }));
 app.use("/api/gameeditor", gameEditorRouter);
 app.use("/api/changelog", changelogRouter);
+app.use("/api/roadmap", roadmapRouter);
+app.use("/api/git-info", gitInfoRouter);
 app.use("/sdk", cors({
   origin: "*",
   methods: ["GET", "POST", "OPTIONS"],
@@ -336,11 +905,204 @@ app.get("/games/:project", (req, res, next) => {
   if (req.path.split("/").length !== 3) return next();
   (async () => {
     try {
-      const row = await get("SELECT is_hidden FROM games WHERE project=?", [req.params.project]);
-      if (!row || row.is_hidden) {
+      const g = await get(
+        `SELECT g.id, g.project, g.title, g.description, g.category, g.banner_path, g.screenshots_json, g.is_hidden,
+                g.is_featured, g.custom_levels_enabled, g.owner_user_id,
+                u.username AS owner_username, pr.display_name AS owner_display_name,
+                (SELECT v.version FROM game_versions v
+                 WHERE v.game_id=g.id AND v.is_published=1 AND v.approval_status='approved'
+                 ORDER BY v.created_at DESC LIMIT 1) AS latest_version,
+                (SELECT v.entry_html FROM game_versions v
+                 WHERE v.game_id=g.id AND v.is_published=1 AND v.approval_status='approved'
+                 ORDER BY v.created_at DESC LIMIT 1) AS entry_html
+         FROM games g
+         LEFT JOIN users u ON u.id = g.owner_user_id
+         LEFT JOIN profiles pr ON pr.user_id = g.owner_user_id
+         WHERE g.project=?`,
+        [req.params.project]
+      );
+      if (!g || g.is_hidden) {
         return res.redirect("/404.html?msg=" + encodeURIComponent("Game not found."));
       }
-      return res.sendFile(path.join(WEB_DIR, "game.html"));
+      let user = null;
+      const authHeader = req.headers.authorization || "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+      if (token) {
+        try {
+          const decoded = verifyToken(token);
+          user = await get(
+            "SELECT id, username, role FROM users WHERE id=?",
+            [decoded.uid]
+          );
+        } catch {}
+      }
+      let screenshots = [];
+      try{
+        const parsed = JSON.parse(g.screenshots_json || "[]");
+        screenshots = Array.isArray(parsed) ? parsed : [];
+      }catch{}
+      let stats = null;
+      let reviews = null;
+      if (user) {
+        stats = await get(
+          `SELECT playtime_ms, sessions, last_played
+           FROM game_playtime
+           WHERE user_id=? AND game_id=?`,
+          [user.id, g.id]
+        );
+        const reviewRows = await all(
+          `SELECT r.rating, r.comment, r.created_at, r.updated_at, u.username
+           FROM game_reviews r
+           JOIN users u ON u.id=r.user_id
+           WHERE r.game_id=?
+             AND (u.is_banned IS NULL OR u.is_banned=0)
+           ORDER BY r.updated_at DESC
+           LIMIT 100`,
+          [g.id]
+        );
+        const avg = await get(
+          `SELECT AVG(rating) AS avg, COUNT(*) AS count FROM game_reviews WHERE game_id=?`,
+          [g.id]
+        );
+        reviews = { reviews: reviewRows, avg_rating: avg?.avg ?? null, count: avg?.count ?? 0 };
+      }
+      const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[c]));
+      const fmtMs = (ms) => {
+        const s = Math.floor((ms || 0) / 1000);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return `${h}h ${m}m`;
+      };
+      const heroHtml = `
+        <span class="badge accent">${escapeHtml(g.category || "Uncategorized")}</span>
+        <h1>${escapeHtml(g.title || "Untitled Game")}</h1>
+        <p>${escapeHtml(g.description || "No description yet.")}</p>
+        <div class="hero-meta">
+          <span class="badge">By ${escapeHtml(g.owner_display_name || g.owner_username || "Unknown")}</span>
+        </div>
+      `.trim();
+      let heroArtHtml = "Launch ready";
+      let heroArtStyle = "";
+      if (g.banner_path) {
+        heroArtHtml = "";
+        heroArtStyle = ` style="background: linear-gradient(130deg,rgba(255,209,102,.2),rgba(20,26,36,.5)), url('${g.banner_path}') center/cover"`;
+      }
+      let mediaHtml = `<div class="muted">No media uploaded yet.</div>`;
+      if (g.banner_path || screenshots.length) {
+        const images = [];
+        if (g.banner_path) {
+          images.push(`<img src="${g.banner_path}" alt="Banner">`);
+        }
+        for (const s of screenshots) {
+          images.push(`<img src="${s}" alt="Screenshot">`);
+        }
+        mediaHtml = `
+          <h2>Media</h2>
+          <div class="gallery" id="gallery">
+            ${images.join("")}
+          </div>
+        `.trim();
+      }
+      let statsHtml = `<div class="muted">No stats yet.</div>`;
+      if (stats) {
+        statsHtml = `
+          <div class="stats">
+            <div class="stat">
+              <div class="label">Your playtime</div>
+              <div class="value">${escapeHtml(fmtMs(stats.playtime_ms || 0))}</div>
+            </div>
+            <div class="stat">
+              <div class="label">Sessions</div>
+              <div class="value">${escapeHtml(stats.sessions || 0)}</div>
+            </div>
+            <div class="stat">
+              <div class="label">Last played</div>
+              <div class="value">${escapeHtml(stats.last_played ? new Date(stats.last_played).toLocaleString() : "—")}</div>
+            </div>
+          </div>
+        `.trim();
+      }
+      const levelsHtml = `<div class="muted">No custom levels yet.</div>`;
+      let reviewBoxHtml = `<div class="muted">Reviews are unavailable for this account.</div>`;
+      let reviewsHtml = `<div class="review-card muted">Reviews are unavailable.</div>`;
+      if (user) {
+        reviewBoxHtml = `
+          <div class="muted">Leave a rating & comment</div>
+          <div id="stars" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button data-star="1" class="secondary" style="width:auto">☆</button>
+            <button data-star="2" class="secondary" style="width:auto">☆</button>
+            <button data-star="3" class="secondary" style="width:auto">☆</button>
+            <button data-star="4" class="secondary" style="width:auto">☆</button>
+            <button data-star="5" class="secondary" style="width:auto">☆</button>
+          </div>
+          <textarea id="comment" rows="3" placeholder="Write your review (optional)"></textarea>
+          <button class="primary" id="submitReview" style="margin-top:10px;width:auto">Submit</button>
+          <div id="revStatus" class="muted" style="margin-top:8px"></div>
+        `.trim();
+        const reviewRows = Array.isArray(reviews?.reviews) ? reviews.reviews : [];
+        if (reviewRows.length) {
+          reviewsHtml = reviewRows.map((row) => {
+            const userLink = `/profile.html?u=${encodeURIComponent(row.username)}`;
+            const stars = "★".repeat(row.rating) + "☆".repeat(5 - row.rating);
+            const when = new Date(row.updated_at || row.created_at).toLocaleString();
+            return `
+              <div class="review-card">
+                <h3><a href="${userLink}">${escapeHtml(row.username)}</a> — ${stars}</h3>
+                <div class="muted">${escapeHtml(when)}</div>
+                <p>${row.comment ? escapeHtml(row.comment) : "<span class='muted'>No comment</span>"}</p>
+              </div>
+            `.trim();
+          }).join("");
+        } else {
+          reviewsHtml = `<div class="review-card">No reviews yet.</div>`;
+        }
+      }
+      const filePath = path.join(WEB_DIR, "game.html");
+      const html = await fs.promises.readFile(filePath, "utf8");
+      let injected = html;
+      injected = injected.replace(
+        /<div id="hero-main">[\s\S]*?<\/div>/,
+        `<div id="hero-main" data-prefilled="1">${heroHtml}</div>`
+      );
+      injected = injected.replace(
+        /<div id="hero-art" class="hero-art"[^>]*>[\s\S]*?<\/div>/,
+        `<div id="hero-art" class="hero-art"${heroArtStyle}>${heroArtHtml}</div>`
+      );
+      injected = injected.replace(
+        /(<section[^>]*id="stats"[^>]*>)[\s\S]*?(<\/section>)/,
+        `$1${statsHtml}$2`
+      );
+      injected = injected.replace(
+        /(<section[^>]*id="media"[^>]*>)[\s\S]*?(<\/section>)/,
+        `$1${mediaHtml}$2`
+      );
+      if (g.custom_levels_enabled === 0) {
+        injected = injected.replace(
+          /<section[^>]*id="levels"[^>]*>[\s\S]*?<\/section>/,
+          `<section class="card" id="levels" hidden></section>`
+        );
+      } else {
+        injected = injected.replace(
+          /(<section[^>]*id="levels"[^>]*>)[\s\S]*?(<\/section>)/,
+          `$1${levelsHtml}$2`
+        );
+      }
+      injected = injected.replace(
+        /(<section[^>]*id="reviewBox"[^>]*>)[\s\S]*?(<\/section>)/,
+        `$1${reviewBoxHtml}$2`
+      );
+      injected = injected.replace(
+        /<div id="reviews"[^>]*>[\s\S]*?<\/div>/,
+        `<div id="reviews" class="grid reviews-grid">${reviewsHtml}</div>`
+      );
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(injected);
     } catch {
       return res.redirect("/404.html?msg=" + encodeURIComponent("Game not found."));
     }
@@ -450,11 +1212,15 @@ app.use("/games", express.static(GAME_STORAGE_DIR, {
 
 app.use("/save/item_icons", express.static(ITEM_ICON_DIR));
 
-app.get("/tos.json", (req, res) => {
+app.get("/tos.json", async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.sendFile(TOS_PATH, err => {
-    if (err && !res.headersSent) res.sendStatus(404);
-  });
+  try {
+    const tos = await ensureTosFile(TOS_PATH);
+    res.json(tos);
+  } catch (err) {
+    console.error("tos generate error", err);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
 /* -----------------------------
@@ -465,6 +1231,14 @@ app.use("/", express.static(WEB_DIR, { extensions: ["html"] }));
 
 app.get("/favicon.ico", (req, res) => {
   res.sendFile(path.join(WEB_DIR, "assets", "favicon.ico"));
+});
+
+app.get("/sitemap.xml", (req, res) => {
+  const host = req.get("host") || "localhost";
+  const protocol = req.protocol || "http";
+  const baseUrl = `${protocol}://${host}`;
+  res.setHeader("Content-Type", "application/xml; charset=utf-8");
+  res.send(buildSitemapXml(baseUrl));
 });
 
 app.get("/:page", (req, res, next) => {
@@ -485,7 +1259,7 @@ async function deleteCustomLevelsForUser(userId) {
   const files = fs.readdirSync(levelsDir).filter((name) => name.endsWith(".sqlite"));
   for (const file of files) {
     const dbPath = path.join(levelsDir, file);
-    const db = new sqlite3.Database(dbPath);
+    const db = openDatabase(dbPath);
     await new Promise((resolve) => {
       db.run("DELETE FROM levels WHERE uploader_user_id=?", [userId], () => {
         db.close(() => resolve());
@@ -580,7 +1354,8 @@ async function processAccountDeletions() {
 /* -----------------------------
    START
 ----------------------------- */
-minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
+await Promise.resolve(migrateLegacyGameStorage());
+await minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
 await initDb();
 await processAccountDeletions();
 setInterval(processAccountDeletions, 6 * 60 * 60 * 1000);

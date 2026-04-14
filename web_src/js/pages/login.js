@@ -12,13 +12,15 @@ document.getElementById("btn").onclick = async ()=>{
     const r = await api.post("/api/auth/login", payload);
     if(!r.token) throw new Error("no token");
     localStorage.setItem("token", r.token);
+    if (r.user?.username) localStorage.setItem("username", r.user.username);
+    if (r.user?.role) localStorage.setItem("role", r.user.role);
     if (r.user?.is_banned) {
       location.href = "/Permanetly-Banned";
     } else if (r.user?.timeout_until) {
       const until = r.user.timeout_until ? `?until=${encodeURIComponent(r.user.timeout_until)}` : "";
       location.href = `/temporay-banned${until}`;
     } else {
-      location.href = "/games.html";
+      location.href = "/games";
     }
   }catch(e){
     if (e?.status === 401 && e?.data?.error === "totp_required") {

@@ -1,25 +1,298 @@
-<!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width,initial-scale=1" />
-      <title>Stats - Yobble</title>
-      <link rel="stylesheet" href="/css/app.css">
-    </head>
-    <body>
-      <div id="topbar"></div>
-      <div class="container">
-<div class="card">
-  <div class="h1">Game stats</div>
-  <div class="muted">Per-game playtime, matches, wins.</div>
-  <div class="hr"></div>
-  <div class="list" id="list"></div>
-</div>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stats And Roadmap - Yobble</title>
+<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/style.css">
+<style>
+.stats-wrap{display:grid;gap:18px}
+.stats-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}
+.stats-item{align-items:flex-start}
+.stats-item__body{flex:1}
+.stats-item__title{font-weight:700}
+.stats-item__meta{margin-top:6px}
+.roadmap-item{align-items:flex-start}
+.roadmap-item__body{flex:1}
+.roadmap-item__head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.roadmap-item__title{font-weight:700}
+.roadmap-item__copy{margin-top:6px;white-space:pre-wrap}
+.roadmap-empty,.stats-empty{color:var(--muted)}
+.mod-tools{display:grid;gap:12px}
+@media (max-width: 960px){
+  .stats-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<main class="stats-wrap">
+  <section class="card hero">
+    <div>
+      <h1>Platform stats and roadmap</h1>
+      <p>Track your play history, and see what is coming next across the Yobble platform.</p>
+      <div class="hero-actions">
+        <a class="pill outline" href="/games">Browse games</a>
+        <a class="pill outline" href="/changelog">View changelog</a>
       </div>
-      <script type="module" src="/js/pages.stats.js"></script>
+    </div>
+    <div class="hero-art">Platform outlook</div>
+  </section>
+
+  <section class="card" id="roadmapModWrap" hidden>
+    <div class="section-title">
+      <h2>Manage roadmap</h2>
+      <span class="pill">Moderators only</span>
+    </div>
+    <form id="roadmapForm" class="mod-tools">
+      <input type="hidden" name="id">
+      <label class="form-field">
+        <span class="small">Title</span>
+        <input name="title" type="text" maxlength="140" required>
+      </label>
+      <label class="form-field">
+        <span class="small">Details</span>
+        <textarea name="body" rows="5" required></textarea>
+      </label>
+      <div class="grid" style="grid-template-columns:minmax(0,1fr) 180px;gap:12px">
+        <label class="form-field">
+          <span class="small">Status</span>
+          <select name="status">
+            <option value="published">Published</option>
+            <option value="draft">Draft</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span class="small">Order</span>
+          <input name="sort_order" type="number" value="0">
+        </label>
+      </div>
+      <div class="row" style="justify-content:flex-start">
+        <button class="primary" type="submit" id="roadmapSave">Save item</button>
+        <button class="secondary" type="button" id="roadmapReset">New item</button>
+        <span class="small" id="roadmapNotice"></span>
+      </div>
+    </form>
+  </section>
+
+  <section class="stats-grid">
+    <div class="card">
+      <div class="section-title">
+        <h2>Game stats</h2>
+        <span class="pill">Your activity</span>
+      </div>
+      <p class="small">Per-game playtime, sessions, and latest activity.</p>
+      <div id="statsList" class="list"></div>
+      <div id="statsEmpty" class="stats-empty" hidden>No stats yet.</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title">
+        <h2>Upcoming features</h2>
+        <span class="pill">Platform roadmap</span>
+      </div>
+      <p class="small">Moderator-managed roadmap items for the wider platform.</p>
+      <div id="roadmapList" class="list"></div>
+      <div id="roadmapEmpty" class="roadmap-empty" hidden>No roadmap items yet.</div>
+    </div>
+  </section>
+</main>
+
 <script type="module">
-  import { loadLayout } from "/js/layout.js";
-  loadLayout();
+import { mountTopbar } from "/js/layout.js";
+import { getCurrentUser } from "/js/auth-client.js";
+import { api } from "/js/api.js";
+
+await mountTopbar("");
+
+const statsList = document.getElementById("statsList");
+const statsEmpty = document.getElementById("statsEmpty");
+const roadmapList = document.getElementById("roadmapList");
+const roadmapEmpty = document.getElementById("roadmapEmpty");
+const roadmapModWrap = document.getElementById("roadmapModWrap");
+const roadmapForm = document.getElementById("roadmapForm");
+const roadmapReset = document.getElementById("roadmapReset");
+const roadmapSave = document.getElementById("roadmapSave");
+const roadmapNotice = document.getElementById("roadmapNotice");
+
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[c]));
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (hours && minutes) return `${hours}h ${minutes}m`;
+  if (hours) return `${hours}h`;
+  if (minutes) return `${minutes}m`;
+  return `${totalSeconds}s`;
+}
+
+function formatLastPlayed(value) {
+  if (!value) return "Never";
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return "Unknown";
+  }
+}
+
+function renderStats(rows) {
+  const entries = Array.isArray(rows) ? rows : [];
+  if (!entries.length) {
+    statsList.innerHTML = "";
+    statsEmpty.hidden = false;
+    return;
+  }
+  statsEmpty.hidden = true;
+  statsList.innerHTML = entries.map((entry) => `
+    <div class="list-item stats-item">
+      <div class="stats-item__body">
+        <div class="stats-item__title">${escapeHtml(entry.title || "Game")}</div>
+        <div class="meta">${escapeHtml(entry.project || "")}</div>
+        <div class="stats-item__meta">
+          Playtime: ${escapeHtml(formatDuration(entry.playtime_ms))} •
+          Sessions: ${escapeHtml(entry.sessions || 0)} •
+          Last played: ${escapeHtml(formatLastPlayed(entry.last_played))}
+        </div>
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderRoadmap(entries, canEdit) {
+  const rows = Array.isArray(entries) ? entries : [];
+  if (!rows.length) {
+    roadmapList.innerHTML = "";
+    roadmapEmpty.hidden = false;
+    return;
+  }
+  roadmapEmpty.hidden = true;
+  roadmapList.innerHTML = rows.map((entry) => `
+    <div class="list-item roadmap-item" data-roadmap-id="${entry.id}">
+      <div class="roadmap-item__body">
+        <div class="roadmap-item__head">
+          <div class="roadmap-item__title">${escapeHtml(entry.title || "Roadmap item")}</div>
+          <div class="row">
+            ${entry.status !== "published" ? `<span class="pill">Draft</span>` : ""}
+            <span class="small">Order ${escapeHtml(entry.sort_order || 0)}</span>
+          </div>
+        </div>
+        <div class="roadmap-item__copy">${escapeHtml(entry.body || "")}</div>
+      </div>
+      ${canEdit ? `<div class="actions"><button class="secondary" type="button" data-edit-roadmap="${entry.id}">Edit</button></div>` : ""}
+    </div>
+  `).join("");
+
+  if (canEdit) {
+    roadmapList.querySelectorAll("[data-edit-roadmap]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-edit-roadmap");
+        const entry = rows.find((item) => String(item.id) === String(id));
+        if (!entry || !roadmapForm) return;
+        roadmapForm.id.value = entry.id;
+        roadmapForm.title.value = entry.title || "";
+        roadmapForm.body.value = entry.body || "";
+        roadmapForm.status.value = entry.status || "published";
+        roadmapForm.sort_order.value = entry.sort_order || 0;
+        roadmapSave.textContent = "Update item";
+        roadmapNotice.textContent = "Editing roadmap item " + entry.id;
+        roadmapForm.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+  }
+}
+
+async function loadStats() {
+  try {
+    const rows = await api.get("/api/stats/me");
+    renderStats(rows);
+  } catch {
+    statsList.innerHTML = "";
+    statsEmpty.hidden = false;
+    statsEmpty.textContent = "Could not load stats.";
+  }
+}
+
+async function loadRoadmap(canEdit) {
+  try {
+    const data = await api.get(canEdit ? "/api/roadmap?status=all" : "/api/roadmap");
+    renderRoadmap(data.entries || [], canEdit);
+  } catch {
+    roadmapList.innerHTML = "";
+    roadmapEmpty.hidden = false;
+    roadmapEmpty.textContent = "Could not load roadmap.";
+  }
+}
+
+const currentUser = await getCurrentUser();
+const isMod = currentUser && (currentUser.role === "admin" || currentUser.role === "mod" || currentUser.role === "moderator");
+
+if (isMod && roadmapModWrap) {
+  roadmapModWrap.hidden = false;
+}
+
+if (roadmapReset && roadmapForm) {
+  roadmapReset.addEventListener("click", () => {
+    roadmapForm.reset();
+    roadmapForm.id.value = "";
+    roadmapForm.sort_order.value = 0;
+    roadmapSave.textContent = "Save item";
+    roadmapNotice.textContent = "";
+  });
+}
+
+if (roadmapForm) {
+  roadmapForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!isMod) return;
+
+    const payload = {
+      title: roadmapForm.title.value.trim(),
+      body: roadmapForm.body.value.trim(),
+      status: roadmapForm.status.value,
+      sort_order: Number(roadmapForm.sort_order.value || 0)
+    };
+
+    if (!payload.title || !payload.body) {
+      roadmapNotice.textContent = "Title and details are required.";
+      return;
+    }
+
+    const isEdit = Boolean(roadmapForm.id.value);
+    roadmapSave.disabled = true;
+    roadmapNotice.textContent = isEdit ? "Updating..." : "Saving...";
+
+    try {
+      await api(isEdit ? `/api/roadmap/${encodeURIComponent(roadmapForm.id.value)}` : "/api/roadmap", {
+        method: isEdit ? "PUT" : "POST",
+        body: payload
+      });
+      roadmapForm.reset();
+      roadmapForm.id.value = "";
+      roadmapForm.sort_order.value = 0;
+      roadmapSave.textContent = "Save item";
+      roadmapNotice.textContent = "Saved.";
+      await loadRoadmap(isMod);
+    } catch {
+      roadmapNotice.textContent = "Save failed.";
+    } finally {
+      roadmapSave.disabled = false;
+    }
+  });
+}
+
+await Promise.all([
+  loadStats(),
+  loadRoadmap(isMod)
+]);
 </script>
-    </body>
-    </html>
+</body>
+</html>
