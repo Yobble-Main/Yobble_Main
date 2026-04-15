@@ -3,6 +3,22 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+val androidKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH")
+    .orElse(providers.gradleProperty("ANDROID_KEYSTORE_PATH"))
+val androidKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD")
+    .orElse(providers.gradleProperty("ANDROID_KEYSTORE_PASSWORD"))
+val androidKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS")
+    .orElse(providers.gradleProperty("ANDROID_KEY_ALIAS"))
+val androidKeyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD")
+    .orElse(providers.gradleProperty("ANDROID_KEY_PASSWORD"))
+val androidKeystoreType = providers.environmentVariable("ANDROID_KEYSTORE_TYPE")
+    .orElse(providers.gradleProperty("ANDROID_KEYSTORE_TYPE"))
+
+val hasReleaseSigning = androidKeystorePath.isPresent
+        && androidKeystorePassword.isPresent
+        && androidKeyAlias.isPresent
+        && androidKeyPassword.isPresent
+
 android {
     namespace = "com.Benno111.dorfplatformertimetravel"
     compileSdk {
@@ -10,7 +26,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.Benno111.Yobble"
+        applicationId = "com.yobble.client"
         minSdk = 21
         targetSdk = 36
         versionCode = 1
@@ -20,9 +36,26 @@ android {
         proguardFiles("proguard-rules.pro")
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(androidKeystorePath.get())
+                storePassword = androidKeystorePassword.get()
+                keyAlias = androidKeyAlias.get()
+                keyPassword = androidKeyPassword.get()
+                if (androidKeystoreType.isPresent) {
+                    storeType = androidKeystoreType.get()
+                }
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

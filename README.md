@@ -49,6 +49,19 @@ The AppImage build pulls from `Client_linux/` and produces `dist/Yobble.appimage
 scripts/build-appimage.sh 0.7.0
 ```
 
+## Android build
+The Android app lives in `Android src/Yobble/`.
+
+- GitHub Actions workflow: `.github/workflows/android-build.yml`
+- Debug APKs are built on every push, pull request, or manual run when Android files change
+- Signed release APKs are built when these GitHub repository secrets are set:
+- `ANDROID_KEYSTORE_BASE64`
+- `ANDROID_KEYSTORE_PASSWORD`
+- `ANDROID_KEY_ALIAS`
+- `ANDROID_KEY_PASSWORD`
+
+The workflow decodes the keystore at runtime and passes signing values into Gradle through environment variables, so no signing material needs to be committed to the repository.
+
 ## Data locations
 - Uploaded games: `save/uploads/games/`
 - Uploaded items/icons: `save/item_icons/`
