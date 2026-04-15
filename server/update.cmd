@@ -14,12 +14,25 @@ echo === Updating Yobble (preserving save data) ===
 
 REM Clone or pull
 if exist "%REPO_DIR%\.git" (
-    echo Repo exists, pulling latest changes...
+    echo Repo exists, fetching latest changes...
     cd /d "%REPO_DIR%"
-    git pull
+    git fetch --all
+    if errorlevel 1 (
+        echo git fetch failed. Check network/credentials.
+        exit /b 1
+    )
+    git reset --hard origin/HEAD
+    if errorlevel 1 (
+        echo git reset failed.
+        exit /b 1
+    )
 ) else (
     echo Cloning repo...
     git clone "%REPO_URL%" "%REPO_DIR%"
+    if errorlevel 1 (
+        echo git clone failed. Check network/credentials.
+        exit /b 1
+    )
 )
 
 REM Ensure destination exists
@@ -31,7 +44,7 @@ if not exist "%DEST_DIR%" (
 REM Copy files and mirror the repo while preserving save data folders/files
 echo Copying files...
 
-robocopy "%REPO_DIR%" "%DEST_DIR%" /MIR /R:2 /W:2 /XD .git saves save data userdata playerdata /XF *.sav *.save *.dat
+robocopy "%REPO_DIR%" "%DEST_DIR%" /MIR /R:2 /W:2 /XD .git .github node_modules saves save data userdata playerdata /XF *.sav *.save *.dat
 set ROBOCODE=%ERRORLEVEL%
 
 if %ROBOCODE% GEQ 8 (
@@ -39,5 +52,8 @@ if %ROBOCODE% GEQ 8 (
     exit /b %ROBOCODE%
 )
 
-echo === Done! Save data preserved ===
+echo === Installing server dependencies ===
+cd /d "%DEST_DIR%\server"
 npm install
+
+echo === Done! Save data preserved ===
