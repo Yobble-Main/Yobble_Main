@@ -20,7 +20,7 @@
     "javascript-obfuscator": "^5.4.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
-    "sqlite": "^5.1.6",
+    "sqlite": "^5.1.1",
     "terser": "^5.46.1",
     "unzipper": "^0.12.3",
     "ws": "^8.19.0"
