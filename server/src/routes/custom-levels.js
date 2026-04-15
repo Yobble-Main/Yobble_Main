@@ -1,7 +1,7 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { openDatabase } from "../sqlite-compat.js";
+import { DatabaseSync } from "node:sqlite";
 import { requireAuth, optionalAuth } from "../auth.js";
 import { get, run } from "../db.js";
 
@@ -15,13 +15,14 @@ const LEVEL_DB_DIR = path.join(PROJECT_ROOT, "save", "custom_levels");
 fs.mkdirSync(LEVEL_DB_DIR, { recursive: true });
 
 const dbCache = new Map();
-const dbInitCache = new Map();
+const dbInitCache = new Set();
 
 function getLevelDb(project) {
   const safeproject = String(project || "").replace(/[^a-z0-9-_]+/gi, "");
   const dbPath = path.join(LEVEL_DB_DIR, `${safeproject}.sqlite`);
   if (dbCache.has(dbPath)) return dbCache.get(dbPath);
-  const db = openDatabase(dbPath);
+  const db = new DatabaseSync(dbPath);
+  db.exec("PRAGMA foreign_keys = ON");
   dbCache.set(dbPath, db);
   return db;
 }
@@ -31,52 +32,40 @@ function getLevelDbKey(project) {
   return path.join(LEVEL_DB_DIR, `${safeproject}.sqlite`);
 }
 
-async function ensureLevelTable(db, dbKey) {
-  if (!dbKey) return;
-  if (dbInitCache.has(dbKey)) {
-    await dbInitCache.get(dbKey);
-    return;
-  }
-  const initPromise = dbRun(
-    db,
-    `CREATE TABLE IF NOT EXISTS levels(
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      version TEXT NOT NULL,
-      description TEXT,
-      raw_data TEXT NOT NULL,
-      uploader_user_id INTEGER NOT NULL,
-      uploader_username TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      difficulty INTEGER,
-      difficulty_set_by INTEGER,
-      difficulty_set_at INTEGER,
-      difficulty_awarded INTEGER DEFAULT 0
-    )`
-  );
-  dbInitCache.set(dbKey, initPromise);
-  await initPromise;
+function ensureLevelTable(db, dbKey) {
+  if (!dbKey || dbInitCache.has(dbKey)) return;
+  db.exec(`CREATE TABLE IF NOT EXISTS levels(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    version TEXT NOT NULL,
+    description TEXT,
+    raw_data TEXT NOT NULL,
+    uploader_user_id INTEGER NOT NULL,
+    uploader_username TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    difficulty INTEGER,
+    difficulty_set_by INTEGER,
+    difficulty_set_at INTEGER,
+    difficulty_awarded INTEGER DEFAULT 0
+  )`);
+  dbInitCache.add(dbKey);
 }
 
 function dbRun(db, sql, params = []) {
-  return new Promise((ok, err) => {
-    db.run(sql, params, function (e) {
-      e ? err(e) : ok(this);
-    });
-  });
+  const stmt = db.prepare(sql);
+  const info = stmt.run(...params);
+  return { lastID: Number(info.lastInsertRowid ?? 0), changes: Number(info.changes ?? 0) };
 }
 
 function dbGet(db, sql, params = []) {
-  return new Promise((ok, err) => {
-    db.get(sql, params, (e, row) => (e ? err(e) : ok(row)));
-  });
+  const stmt = db.prepare(sql);
+  return stmt.get(...params);
 }
 
 function dbAll(db, sql, params = []) {
-  return new Promise((ok, err) => {
-    db.all(sql, params, (e, rows) => (e ? err(e) : ok(rows)));
-  });
+  const stmt = db.prepare(sql);
+  return stmt.all(...params);
 }
 
 function clampDifficulty(v) {

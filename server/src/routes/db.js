@@ -1,28 +1,26 @@
-import { openDatabase } from "../sqlite-compat.js";
+import { DatabaseSync } from "node:sqlite";
+import path from "path";
 
-export const db = openDatabase("benno111engene.sqlite");
+export const db = new DatabaseSync(path.resolve("benno111engene.sqlite"));
+db.exec("PRAGMA foreign_keys = ON");
 
 /* -----------------------------
    DB helpers
 ------------------------------ */
 export function run(sql, params = []) {
-  return new Promise((ok, err) => {
-    db.run(sql, params, function (e) {
-      e ? err(e) : ok(this);
-    });
-  });
+  const stmt = db.prepare(sql);
+  const info = stmt.run(...params);
+  return { lastID: Number(info.lastInsertRowid ?? 0), changes: Number(info.changes ?? 0) };
 }
 
 export function get(sql, params = []) {
-  return new Promise((ok, err) => {
-    db.get(sql, params, (e, row) => (e ? err(e) : ok(row)));
-  });
+  const stmt = db.prepare(sql);
+  return stmt.get(...params);
 }
 
 export function all(sql, params = []) {
-  return new Promise((ok, err) => {
-    db.all(sql, params, (e, rows) => (e ? err(e) : ok(rows)));
-  });
+  const stmt = db.prepare(sql);
+  return stmt.all(...params);
 }
 
 /* -----------------------------

@@ -10,7 +10,7 @@ import { minify as terserMinify } from "terser";
 import CleanCSS from "clean-css";
 import { minify as htmlMinify } from "html-minifier-terser";
 import JavaScriptObfuscator from "javascript-obfuscator";
-import { openDatabase } from "./sqlite-compat.js";
+import { DatabaseSync } from "node:sqlite";
 
 import { initDb, get, run, all } from "./db.js";
 import { getUserAuthState, requireAuth, verifyToken } from "./auth.js";
@@ -1253,18 +1253,15 @@ app.use((req, res) => {
   res.status(404).sendFile(path.join(WEB_DIR, "404.html"));
 });
 
-async function deleteCustomLevelsForUser(userId) {
+function deleteCustomLevelsForUser(userId) {
   const levelsDir = path.join(PROJECT_ROOT, "save", "custom_levels");
   if (!fs.existsSync(levelsDir)) return;
   const files = fs.readdirSync(levelsDir).filter((name) => name.endsWith(".sqlite"));
   for (const file of files) {
     const dbPath = path.join(levelsDir, file);
-    const db = openDatabase(dbPath);
-    await new Promise((resolve) => {
-      db.run("DELETE FROM levels WHERE uploader_user_id=?", [userId], () => {
-        db.close(() => resolve());
-      });
-    });
+    const db = new DatabaseSync(dbPath);
+    db.prepare("DELETE FROM levels WHERE uploader_user_id=?").run(userId);
+    db.close();
   }
 }
 
