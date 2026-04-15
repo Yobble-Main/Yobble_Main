@@ -84,65 +84,67 @@ if(!project){
     const published = versions.find(v => v.is_published)?.version || "—";
     latestVersion.textContent = `Latest ${latest}`;
     publishedVersion.textContent = `Published ${published}`;
-    if(versions.length){
-      root.innerHTML = `
-        <form id="${uploadFormId}" style="margin-bottom:16px">
-          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
-            <div>
-              <label class="muted">Version</label>
-              <input name="version" required placeholder="e.g. 1.0.1" style="width:100%;margin-top:6px">
-            </div>
-            <div>
-              <label class="muted">Entry HTML</label>
-              <input name="entry_html" placeholder="index" style="width:100%;margin-top:6px">
-            </div>
-            <div>
-              <label class="muted">Zip file</label>
-              <input type="file" name="zip" accept=".zip" required style="width:100%;margin-top:6px">
-            </div>
+    root.innerHTML = `
+      <form id="${uploadFormId}" style="margin-bottom:16px">
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+          <div>
+            <label class="muted">Version</label>
+            <input name="version" required placeholder="e.g. 1.0.1" style="width:100%;margin-top:6px">
           </div>
-          <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-            <button class="badge accent" type="submit">Upload update</button>
-            <span class="muted" id="uploadMsg"></span>
+          <div>
+            <label class="muted">Entry HTML</label>
+            <input name="entry_html" placeholder="index" style="width:100%;margin-top:6px">
           </div>
-          <div class="progress" aria-hidden="true">
-            <span id="uploadProgress"></span>
+          <div>
+            <label class="muted">Zip file</label>
+            <input type="file" name="zip" accept=".zip" required style="width:100%;margin-top:6px">
           </div>
-        </form>
-        <table>
-          <thead>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <button class="badge accent" type="submit">Upload version</button>
+          <span class="muted" id="uploadMsg"></span>
+        </div>
+        <div class="progress" aria-hidden="true">
+          <span id="uploadProgress"></span>
+        </div>
+      </form>
+      ${versions.length ? `
+      <table>
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Status</th>
+            <th>Published</th>
+            <th>Uploaded</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${versions.map(v => `
             <tr>
-              <th>Version</th>
-              <th>Status</th>
-              <th>Published</th>
-              <th>Uploaded</th>
-              <th>Action</th>
+              <td>${escapeHtml(v.version)}</td>
+              <td>${escapeHtml(v.approval_status || "pending")}</td>
+              <td>${v.is_published ? "Yes" : "No"}</td>
+              <td>${escapeHtml(formatDate(v.created_at))}</td>
+              <td>
+                ${v.is_published
+                  ? `<button class="badge accent" data-unpublish="${escapeHtml(v.version)}">Unpublish</button>`
+                  : v.approval_status === "approved"
+                    ? `<button class="badge accent" data-publish="${escapeHtml(v.version)}">Publish</button>`
+                    : `<span class="muted">—</span>`}
+                ${v.approval_status === "rejected"
+                  ? `<button class="badge accent" data-resubmit="${escapeHtml(v.version)}">Resubmit</button>`
+                  : ""}
+                <button class="badge" data-whitelist="${escapeHtml(v.version)}">Whitelist</button>
+                <button class="badge" data-delete="${escapeHtml(v.version)}">Delete</button>
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            ${versions.map(v => `
-              <tr>
-                <td>${escapeHtml(v.version)}</td>
-                <td>${escapeHtml(v.approval_status || "pending")}</td>
-                <td>${v.is_published ? "Yes" : "No"}</td>
-                <td>${escapeHtml(formatDate(v.created_at))}</td>
-                <td>
-                  ${v.is_published
-                    ? `<button class="badge accent" data-unpublish="${escapeHtml(v.version)}">Unpublish</button>`
-                    : v.approval_status === "approved"
-                      ? `<button class="badge accent" data-publish="${escapeHtml(v.version)}">Publish</button>`
-                      : `<span class="muted">—</span>`}
-                  ${v.approval_status === "rejected"
-                    ? `<button class="badge accent" data-resubmit="${escapeHtml(v.version)}">Resubmit</button>`
-                    : ""}
-                  <button class="badge" data-whitelist="${escapeHtml(v.version)}">Whitelist</button>
-                  <button class="badge" data-delete="${escapeHtml(v.version)}">Delete</button>
-                </td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      `;
+          `).join("")}
+        </tbody>
+      </table>
+      ` : `<div class="empty">No versions uploaded yet.</div>`}
+    `;
+    if(versions.length){
       root.querySelectorAll("[data-publish]").forEach(btn => {
         btn.addEventListener("click", async () => {
           const v = btn.getAttribute("data-publish");
@@ -245,8 +247,6 @@ if(!project){
           }
         });
       }
-}else{
-      root.innerHTML = `<div class="empty">No versions uploaded yet.</div>`;
     }
   }catch{
     gameTitle.textContent = "Dashboard unavailable";
