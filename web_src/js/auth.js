@@ -1,4 +1,9 @@
 import { api } from "./api.js";
+import { clearAuthState, installAuthStorageGuards, rememberAuthState, repairAuthState } from "./auth-storage.js";
+
+installAuthStorageGuards();
+repairAuthState();
+
 export async function requireAuth(){
   const token = localStorage.getItem("token");
   if(!token){
@@ -42,9 +47,7 @@ export async function logout(){
   try{
     await api.post("/api/auth/logout", {});
   }catch{}
-  localStorage.removeItem("token");
-  localStorage.removeItem("username");
-  localStorage.removeItem("role");
+  clearAuthState();
   location.href = "/login";
 }
 
@@ -63,15 +66,11 @@ export async function login(username, password, extras = {}){
     ...extras
   };
   const data = await api.post("/api/auth/login", payload);
-  if (data?.token) {
-    localStorage.setItem("token", data.token);
-  }
-  if (data?.user?.username) {
-    localStorage.setItem("username", data.user.username);
-  }
-  if (data?.user?.role) {
-    localStorage.setItem("role", data.user.role);
-  }
+  rememberAuthState({
+    token: data?.token,
+    username: data?.user?.username,
+    role: data?.user?.role
+  });
   return data;
 }
 
@@ -81,14 +80,10 @@ export async function register(username, email, password){
     password: String(password || "")
   };
   const data = await api.post("/api/auth/register", payload);
-  if (data?.token) {
-    localStorage.setItem("token", data.token);
-  }
-  if (data?.user?.username) {
-    localStorage.setItem("username", data.user.username);
-  }
-  if (data?.user?.role) {
-    localStorage.setItem("role", data.user.role);
-  }
+  rememberAuthState({
+    token: data?.token,
+    username: data?.user?.username,
+    role: data?.user?.role
+  });
   return data;
 }

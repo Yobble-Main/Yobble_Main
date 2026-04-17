@@ -1,4 +1,8 @@
 import { api } from "../api-pages/auth.js";
+import { clearAuthState, installAuthStorageGuards, rememberAuthState, repairAuthState } from "../auth-storage.js";
+
+installAuthStorageGuards();
+repairAuthState();
 export async function requireAuth(){
   const token = localStorage.getItem("token");
   if(!token){
@@ -38,6 +42,6 @@ export async function logout(){
   try{
     await api.post("/api/auth/logout", {});
   }catch{}
-  localStorage.removeItem("token");
+  clearAuthState();
   location.href = "/login";
 }

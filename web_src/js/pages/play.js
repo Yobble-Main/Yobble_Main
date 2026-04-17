@@ -18,12 +18,15 @@ const frame = document.getElementById("frame");
 const info = document.getElementById("info");
 const titleEl = document.getElementById("title");
 const refreshBtn = document.getElementById("refreshBtn");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
 const fullscreenFrame = document.getElementById("fullscreenFrame");
 const backBtn = document.getElementById("backBtn");
 const playWrap = document.querySelector(".play-wrap");
 const playShell = document.querySelector(".play-shell");
 const collapseBtn = document.getElementById("collapseBtn");
 const expandBtn = document.getElementById("expandBtn");
+const windowControls = document.getElementById("windowControls");
+const isDesktop = !!window.electron;
 if(!project || !version){
   info.textContent = "Missing project/version";
   throw new Error("missing params");
@@ -49,6 +52,24 @@ info.textContent = `Version ${version}`;
 if (authToken) {
   document.cookie = `auth_token=${encodeURIComponent(authToken)}; path=/api; max-age=300; SameSite=Lax`;
 }
+if (isDesktop) {
+  document.body.classList.add("desktop-app");
+  if (windowControls) {
+    windowControls.hidden = false;
+    windowControls.querySelectorAll("[data-window-action]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const action = button.dataset.windowAction;
+        if (action === "minimize") {
+          await window.electron.windowMinimize();
+        } else if (action === "maximize") {
+          await window.electron.windowToggleMaximize();
+        } else if (action === "close") {
+          await window.electron.windowClose();
+        }
+      });
+    });
+  }
+}
 // Load game iframe (keep token for in-game verification if needed)
 const params = new URLSearchParams();
 if (token) params.set("launch_token", token);
@@ -58,6 +79,46 @@ frame.src = gameUrl;
 refreshBtn.onclick = () => {
   frame.src = gameUrl;
 };
+async function isWindowFullscreen(){
+  if (isDesktop && window.electron?.windowIsFullscreen) {
+    return await window.electron.windowIsFullscreen();
+  }
+  return !!(document.fullscreenElement || document.webkitFullscreenElement);
+}
+function setFullscreenButtonLabel(active){
+  if (!fullscreenBtn) return;
+  fullscreenBtn.textContent = active ? "Exit fullscreen" : "Fullscreen";
+}
+async function enterFallbackFullscreen(){
+  if (playWrap.requestFullscreen) {
+    await playWrap.requestFullscreen();
+  } else if (playWrap.webkitRequestFullscreen) {
+    await playWrap.webkitRequestFullscreen();
+  }
+}
+async function exitFallbackFullscreen(){
+  if (document.exitFullscreen) {
+    await document.exitFullscreen();
+  } else if (document.webkitExitFullscreen) {
+    await document.webkitExitFullscreen();
+  }
+}
+async function toggleFullscreen(){
+  if (isDesktop && window.electron?.windowToggleFullscreen) {
+    await window.electron.windowToggleFullscreen();
+    setFullscreenButtonLabel(await isWindowFullscreen());
+    return;
+  }
+  if (document.fullscreenElement || document.webkitFullscreenElement) {
+    await exitFallbackFullscreen();
+  } else {
+    await enterFallbackFullscreen();
+  }
+  setFullscreenButtonLabel(await isWindowFullscreen());
+}
+if (fullscreenBtn) {
+  fullscreenBtn.onclick = toggleFullscreen;
+}
 const canFullscreen = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
 const isFullscreen = () =>
   !!(document.fullscreenElement || document.webkitFullscreenElement);
@@ -99,16 +160,12 @@ if(fullscreenFrame){
       await playWrap.webkitRequestFullscreen();
     }
   });
-  document.addEventListener("fullscreenchange", postFullscreenState);
-  document.addEventListener("webkitfullscreenchange", postFullscreenState);
+document.addEventListener("fullscreenchange", postFullscreenState);
+document.addEventListener("webkitfullscreenchange", postFullscreenState);
 }
 window.addEventListener("resize", async () => {
   if(isFullscreen() && !isBrowserFullscreen()){
-    if(document.exitFullscreen){
-      await document.exitFullscreen();
-    }else if(document.webkitExitFullscreen){
-      await document.webkitExitFullscreen();
-    }
+    await exitFallbackFullscreen();
   }
 });
 window.addEventListener("keydown", async (event) => {
@@ -121,18 +178,10 @@ window.addEventListener("keydown", async (event) => {
   if(event.key.toLowerCase() !== "f") return;
   event.preventDefault();
   if(isFullscreen()){
-    if(document.exitFullscreen){
-      await document.exitFullscreen();
-    }else if(document.webkitExitFullscreen){
-      await document.webkitExitFullscreen();
-    }
+    await exitFallbackFullscreen();
     return;
   }
-  if(playWrap.requestFullscreen){
-    await playWrap.requestFullscreen();
-  }else if(playWrap.webkitRequestFullscreen){
-    await playWrap.webkitRequestFullscreen();
-  }
+  await enterFallbackFullscreen();
 });
 backBtn.onclick = () => {
   if(returnTo){
@@ -154,6 +203,7 @@ if(expandBtn){
 if(returnTo){
   backBtn.textContent = "Back to queue";
 }
+setFullscreenButtonLabel(await isWindowFullscreen());
 async function end(){
   if(!session_id) return;
   try{
@@ -170,13 +220,15 @@ function buildStorageSyncScript(storageproject, storageVersion){
       const project = ${JSON.stringify(storageproject)};
       const version = ${JSON.stringify(storageVersion)};
       const base = \`/api/storage/\${encodeURIComponent(project)}/\${encodeURIComponent(version)}\`;
-      const tokenKey = "token";
-      const blockedKeys = new Set([tokenKey]);
+      const blockedKeys = new Set(["token", "username", "role"]);
       const rawGet = window.localStorage.getItem.bind(window.localStorage);
       const rawSet = window.localStorage.setItem.bind(window.localStorage);
       const rawRemove = window.localStorage.removeItem.bind(window.localStorage);
-      try{ rawRemove(tokenKey); }catch(e){}
-      const token = null;
+      const preservedAuth = {};
+      for (const key of blockedKeys) {
+        preservedAuth[key] = rawGet(key) || "";
+      }
+      const token = preservedAuth.token || null;
       const authHeader = token ? { Authorization: \`Bearer \${token}\` } : {};
       const ls = window.localStorage;
       const origSet = ls.setItem.bind(ls);
@@ -230,11 +282,20 @@ function buildStorageSyncScript(storageproject, storageVersion){
         }).catch(() => {});
       };
       ls.clear = function(){
+        const savedAuth = {};
+        for (const key of blockedKeys) {
+          savedAuth[key] = origGet(key) || "";
+        }
         origClear();
+        for (const [key, value] of Object.entries(savedAuth)) {
+          if (value) {
+            origSet(key, value);
+          }
+        }
         fetch(base, { method: "DELETE", headers: authHeader, credentials: "include" }).catch(() => {});
       };
       ls.getItem = function(key){
-        if (blockedKeys.has(String(key))) return "";
+        if (blockedKeys.has(String(key))) return origGet(String(key)) || "";
         return origGet(String(key));
       };
       loadRemote();

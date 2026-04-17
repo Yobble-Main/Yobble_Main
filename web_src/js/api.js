@@ -1,3 +1,8 @@
+import { installAuthStorageGuards, rememberAuthState, repairAuthState } from "./auth-storage.js";
+
+installAuthStorageGuards();
+repairAuthState();
+
 function buildHeaders(token, extra, body){
   const headers = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -26,15 +31,11 @@ export async function api(url, opts = {}){
     signal: opts.signal
   });
   const data = await readBody(res);
-  if (data?.token) {
-    localStorage.setItem("token", data.token);
-  }
-  if (data?.user?.username) {
-    localStorage.setItem("username", data.user.username);
-  }
-  if (data?.user?.role) {
-    localStorage.setItem("role", data.user.role);
-  }
+  rememberAuthState({
+    token: data?.token,
+    username: data?.user?.username,
+    role: data?.user?.role
+  });
   if (!res.ok) {
     const msg = typeof data === "string" ? data : (data?.error || res.statusText);
     const err = new Error(msg || "Request failed");

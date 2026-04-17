@@ -850,9 +850,9 @@ reportRoomBtn.addEventListener("click", function () {
   window.location.href = url;
 });
 
-document.getElementById("logoutBtn").addEventListener("click", function () {
-  localStorage.removeItem("token");
-  localStorage.removeItem("username");
+document.getElementById("logoutBtn").addEventListener("click", async function () {
+  const { clearAuthState } = await import("/js/auth-storage.js");
+  clearAuthState();
   window.location.href = "/login";
 });
 

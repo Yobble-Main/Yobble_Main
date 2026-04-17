@@ -1,3 +1,5 @@
+import { clearAuthState } from "./auth-storage.js";
+
 const HEADER_HTML = `
 <header>
   <img src="/assets/logo.svg" alt="Yobble" style="width:28px;height:28px">
@@ -161,9 +163,7 @@ export async function mountTopbar(page){
   if (logoutBtn) {
     logoutBtn.addEventListener("click", (event) => {
       event.preventDefault();
-      localStorage.removeItem("token");
-      localStorage.removeItem("username");
-      localStorage.removeItem("role");
+      clearAuthState();
       location.href = "/login";
     });
   }
