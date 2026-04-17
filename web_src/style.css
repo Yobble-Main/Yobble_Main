@@ -1,5 +1,25 @@
 
 @import url("https://fonts.googleapis.com/css2?family=Jaro:opsz@6..72&display=swap");
+html{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(77,163,255,.75) rgba(12,15,20,.9);
+}
+*::-webkit-scrollbar{
+  width:12px;
+  height:12px;
+}
+*::-webkit-scrollbar-track{
+  background:rgba(12,15,20,.9);
+}
+*::-webkit-scrollbar-thumb{
+  border:3px solid rgba(12,15,20,.9);
+  border-radius:999px;
+  background:linear-gradient(180deg, rgba(77,163,255,.95), rgba(14,165,233,.75));
+  min-height:40px;
+}
+*::-webkit-scrollbar-thumb:hover{
+  background:linear-gradient(180deg, rgba(110,231,255,1), rgba(77,163,255,.9));
+}
 *{box-sizing:border-box}
 body{margin:0;font-family:"Jaro",system-ui;background:var(--bg);color:var(--text)}
 body.desktop-app header{

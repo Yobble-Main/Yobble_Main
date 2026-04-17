@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 
 const BASE_URL = (process.env.YOBBLE_LIVE_URL || process.env.YOBBLE_BASE_URL || "http://photography-cage.gl.at.ply.gg:52426/").replace(/\/$/, "");
@@ -6,6 +7,25 @@ const APP_NAME = "Yobble";
 const windows = new Set();
 
 app.setName(APP_NAME);
+app.setAppUserModelId(APP_NAME);
+
+function findExistingPath(candidates) {
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function resolveAppIconPath() {
+  const appPath = app.getAppPath();
+  return findExistingPath([
+    path.join(appPath, "..", "server", "icon.ico"),
+    path.join(appPath, "..", "icon.ico"),
+    path.join(appPath, "server", "icon.ico")
+  ]);
+}
 
 function isInternalUrl(url) {
   return url.startsWith("/") || url.startsWith(BASE_URL);
@@ -27,12 +47,14 @@ function resolveUrl(target) {
 }
 
 function createWindow(target = "/index") {
+  const iconPath = resolveAppIconPath();
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     backgroundColor: "#11161f",
     title: APP_NAME,
     frame: false,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(app.getAppPath(), "preload.cjs"),
       contextIsolation: true,

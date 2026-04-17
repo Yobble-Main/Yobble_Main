@@ -2,6 +2,20 @@
   --bg:#0f1220; --card:#171a2b; --muted:#9aa4b2; --text:#e7edf5; --accent:#6ee7ff;
   --danger:#ff5c7a; --ok:#34d399; --border:#262a41;
 }
+html{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(110,231,255,.8) rgba(12,15,29,.95);
+}
+*::-webkit-scrollbar{width:12px;height:12px}
+*::-webkit-scrollbar-track{background:rgba(12,15,29,.95)}
+*::-webkit-scrollbar-thumb{
+  border:3px solid rgba(12,15,29,.95);
+  border-radius:999px;
+  background:linear-gradient(180deg, rgba(110,231,255,.95), rgba(110,231,255,.65));
+}
+*::-webkit-scrollbar-thumb:hover{
+  background:linear-gradient(180deg, rgba(125,242,255,1), rgba(110,231,255,.85));
+}
 *{box-sizing:border-box}
 body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
 a{color:inherit;text-decoration:none}
