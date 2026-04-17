@@ -1,4 +1,7 @@
 import { clearAuthState } from "./auth-storage.js";
+import { applyTheme, bindThemeSelect } from "./theme.js";
+
+applyTheme();
 
 const HEADER_HTML = `
 <header>
@@ -96,6 +99,10 @@ export async function mountTopbar(page){
   const username = localStorage.getItem("username");
   const role = localStorage.getItem("role");
   document.body.insertAdjacentHTML("afterbegin", HEADER_HTML);
+  const themeSelect = document.getElementById("theme");
+  if (themeSelect) {
+    bindThemeSelect(themeSelect);
+  }
   if (window.electron) {
     document.body.classList.add("desktop-app");
     const windowControls = document.getElementById("windowControls");

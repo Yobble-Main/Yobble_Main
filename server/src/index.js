@@ -15,6 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { initDb, get, run, all } from "./db.js";
 import { getUserAuthState, requireAuth, verifyToken } from "./auth.js";
 import { ensureTosFile } from "./tos.js";
+import { runChatStartupModerationSweep } from "./routes/chat.js";
 
 // ⭐ Single import for all routers
 import {
@@ -1354,6 +1355,7 @@ async function processAccountDeletions() {
 await Promise.resolve(migrateLegacyGameStorage());
 await minifyWebAssets(WEB_SOURCE_DIR, WEB_DIR);
 await initDb();
+await runChatStartupModerationSweep();
 await processAccountDeletions();
 setInterval(processAccountDeletions, 6 * 60 * 60 * 1000);
 

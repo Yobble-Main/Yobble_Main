@@ -27,7 +27,7 @@
     justify-content: space-between;
     padding: 10px 20px;
     border-bottom: 1px solid var(--border);
-    background: #0c0f14;
+    background: var(--card);
     position: sticky;
     top: 0;
     z-index: 1000;
@@ -36,6 +36,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
+    flex-wrap: wrap;
   }
   .play-wrap {
     flex: 1;
@@ -60,7 +61,7 @@
   }
   .collapse-toggle {
     border: 1px solid var(--border);
-    background: var(--card);
+    background: var(--surface);
     color: var(--text);
     padding: 8px 10px;
     border-radius: 8px;
@@ -102,8 +103,9 @@
     height: 30px;
     padding: 0;
     border-radius: 8px;
-    border: 1px solid rgba(255,255,255,.08);
-    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -111,12 +113,12 @@
     line-height: 1;
   }
   .windowControl:hover {
-    border-color: rgba(77,163,255,.45);
-    background: rgba(77,163,255,.12);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--surface));
   }
   .windowControl-close:hover {
-    border-color: rgba(255,93,93,.8);
-    background: rgba(255,93,93,.18);
+    border-color: var(--danger, #ef4444);
+    background: color-mix(in srgb, var(--danger, #ef4444) 18%, var(--surface));
   }
 </style>
 </head>

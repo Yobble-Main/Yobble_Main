@@ -23,6 +23,14 @@
         <div class="stack">
           <div class="pill">Included</div>
           <div class="note">Theme variables, form controls, cards, and list styles.</div>
+          <div class="form-field">
+            <label for="themeSelect">Theme</label>
+            <select id="themeSelect">
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
+          </div>
         </div>
       </div>
     </section>
@@ -103,5 +111,10 @@
       </div>
     </section>
   </main>
+  <script type="module">
+    import { bindThemeSelect } from "/js/theme.js";
+
+    bindThemeSelect(document.getElementById("themeSelect"));
+  </script>
 </body>
 </html>

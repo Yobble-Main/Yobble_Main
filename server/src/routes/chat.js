@@ -352,6 +352,40 @@ async function sweepAllChatMessages(batchSize = 500) {
   }
 }
 
+export async function runChatStartupModerationSweep() {
+  if (chatSweepStarted) return;
+  chatSweepStarted = true;
+
+  const messageSweep = sweepAllChatMessages()
+    .then((result) => {
+      if (result.totalRemoved > 0) {
+        console.log(`[chat] removed ${result.totalRemoved} bad messages during startup sweep`);
+      }
+      return result;
+    })
+    .catch((err) => {
+      console.error("[chat] startup moderation sweep failed:", err);
+      return { totalScanned: 0, totalRemoved: 0 };
+    });
+
+  const roomSweep = sweepBadRoomNames()
+    .then((result) => {
+      if (result.removed.length > 0) {
+        console.log(`[chat] removed ${result.removed.length} bad rooms during startup sweep`);
+      }
+      if (result.banned.length > 0) {
+        console.log(`[chat] permanently banned ${result.banned.length} accounts for bad room names`);
+      }
+      return result;
+    })
+    .catch((err) => {
+      console.error("[chat] startup room moderation sweep failed:", err);
+      return { removed: [], banned: [] };
+    });
+
+  await Promise.all([messageSweep, roomSweep]);
+}
+
 function sanitizeRoom(name) {
   if (typeof name !== "string") return "";
   const trimmed = name.trim().toLowerCase();
@@ -528,33 +562,6 @@ export function createChatRouter({ projectRoot }) {
   ensureDir(uploadDir);
 
   const upload = multer({ dest: uploadDir });
-
-  if (!chatSweepStarted) {
-    chatSweepStarted = true;
-    setTimeout(() => {
-      sweepAllChatMessages()
-        .then((result) => {
-          if (result.totalRemoved > 0) {
-            console.log(`[chat] removed ${result.totalRemoved} bad messages during startup sweep`);
-          }
-        })
-        .catch((err) => {
-          console.error("[chat] startup moderation sweep failed:", err);
-        });
-      sweepBadRoomNames()
-        .then((result) => {
-          if (result.removed.length > 0) {
-            console.log(`[chat] removed ${result.removed.length} bad rooms during startup sweep`);
-          }
-          if (result.banned.length > 0) {
-            console.log(`[chat] permanently banned ${result.banned.length} accounts for bad room names`);
-          }
-        })
-        .catch((err) => {
-          console.error("[chat] startup room moderation sweep failed:", err);
-        });
-    }, 0);
-  }
 
   router.get("/rooms", requireAuth, async (req, res) => {
     const { username } = req.user;

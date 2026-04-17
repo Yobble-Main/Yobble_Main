@@ -8,7 +8,7 @@ export const profileRouter = express.Router();
 profileRouter.get("/me", requireAuth, async (req,res)=>{
   let p = await get(
     `SELECT u.id,u.username,u.role,u.is_banned,
-            pr.display_name,pr.bio,pr.avatar_url,pr.status_text,pr.updated_at,
+            pr.display_name,pr.bio,pr.avatar_url,pr.status_text,pr.theme,pr.updated_at,
             pr.hair_color,pr.hair_length,pr.hair_type_back,pr.hair_type_front,
             pr.hair_type_left,pr.hair_type_right,pr.hair_variation,
             pr.skin_tone,pr.eyes,pr.outfit,pr.accessories,
@@ -71,6 +71,7 @@ profileRouter.patch("/me", requireAuth, async (req,res)=>{
     bio,
     avatar_url,
     status_text,
+    theme,
     hair_color,
     hair_length,
     hair_type_back,
@@ -89,6 +90,7 @@ profileRouter.patch("/me", requireAuth, async (req,res)=>{
       bio=COALESCE(?,bio),
       avatar_url=COALESCE(?,avatar_url),
       status_text=COALESCE(?,status_text),
+      theme=COALESCE(?,theme),
       hair_color=COALESCE(?,hair_color),
       hair_length=COALESCE(?,hair_length),
       hair_type_back=COALESCE(?,hair_type_back),
@@ -107,6 +109,7 @@ profileRouter.patch("/me", requireAuth, async (req,res)=>{
       bio ?? null,
       avatar_url ?? null,
       status_text ?? null,
+      theme ?? null,
       hair_color ?? null,
       hair_length ?? null,
       hair_type_back ?? null,
@@ -130,6 +133,7 @@ profileRouter.get("/lookup", requireAuth, async (req,res)=>{
   if(!q) return res.json({ users: [] });
   const users = await all(
     `SELECT u.id,u.username,pr.display_name,pr.avatar_url,pr.status_text,pr.bio,
+            pr.theme,
             pr.hair_color,pr.hair_length,pr.hair_type_back,pr.hair_type_front,
             pr.hair_type_left,pr.hair_type_right,pr.hair_variation,
             pr.skin_tone,pr.eyes,pr.outfit,pr.accessories
@@ -148,7 +152,7 @@ profileRouter.get("/lookup-exact", requireAuth, async (req,res)=>{
   if(!u) return res.status(400).json({ error: "bad_request" });
   const user = await get(
     `SELECT u.id,u.username,u.role,u.is_banned,u.ban_reason,u.banned_at,u.timeout_until,u.timeout_reason,
-            pr.display_name,pr.bio,pr.avatar_url,pr.status_text,pr.updated_at,
+            pr.display_name,pr.bio,pr.avatar_url,pr.status_text,pr.theme,pr.updated_at,
             pr.hair_color,pr.hair_length,pr.hair_type_back,pr.hair_type_front,
             pr.hair_type_left,pr.hair_type_right,pr.hair_variation,
             pr.skin_tone,pr.eyes,pr.outfit,pr.accessories

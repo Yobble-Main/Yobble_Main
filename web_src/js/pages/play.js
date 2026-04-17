@@ -1,3 +1,4 @@
+import { applyTheme } from "../theme.js";
 import { api } from "../api-pages/play.js";
 import { requireAuth } from "../auth.js";
 await requireAuth();
@@ -51,6 +52,15 @@ titleEl.textContent = project;
 info.textContent = `Version ${version}`;
 if (authToken) {
   document.cookie = `auth_token=${encodeURIComponent(authToken)}; path=/api; max-age=300; SameSite=Lax`;
+}
+try {
+  const me = await api.get("/api/profile/me");
+  const accountTheme = me?.profile?.theme;
+  if (accountTheme) {
+    applyTheme(accountTheme);
+  }
+} catch {
+  // Fall back to the local theme if the profile lookup fails.
 }
 if (isDesktop) {
   document.body.classList.add("desktop-app");

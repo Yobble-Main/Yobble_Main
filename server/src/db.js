@@ -216,6 +216,7 @@ export async function initDb() {
     bio TEXT,
     avatar_url TEXT,
     status_text TEXT,
+    theme TEXT,
     updated_at INTEGER,
     hair_color TEXT,
     hair_length TEXT,
@@ -234,6 +235,7 @@ export async function initDb() {
   await addColumnIfMissing("profiles", "bio", "TEXT");
   await addColumnIfMissing("profiles", "avatar_url", "TEXT");
   await addColumnIfMissing("profiles", "status_text", "TEXT");
+  await addColumnIfMissing("profiles", "theme", "TEXT");
   await addColumnIfMissing("profiles", "updated_at", "INTEGER");
   await addColumnIfMissing("profiles", "hair_color", "TEXT");
   await addColumnIfMissing("profiles", "hair_length", "TEXT");

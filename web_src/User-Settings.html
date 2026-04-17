@@ -177,6 +177,7 @@
 <script type="module">
   import { mountTopbar } from "/js/layout.js";
   import { api } from "/js/api.js";
+  import { setThemePreference } from "/js/theme.js";
   await mountTopbar("uprofile");
 
   const form = document.getElementById("settingsForm");
@@ -195,6 +196,9 @@
           field.checked = Boolean(value);
         } else {
           field.value = value;
+          if (key === "theme") {
+            setThemePreference(value || "system");
+          }
         }
       });
       status.textContent = "Draft loaded";
@@ -226,13 +230,15 @@
       const mapping = {
         displayName: profile.display_name || "",
         statusText: profile.status_text || "",
-        bio: profile.bio || ""
+        bio: profile.bio || "",
+        theme: profile.theme || "system"
       };
       Object.entries(mapping).forEach(([key, value]) => {
         const field = form.elements.namedItem(key);
         if (!field) return;
         field.value = value;
       });
+      setThemePreference(mapping.theme);
       if (deleteStatus) {
         if (profile.delete_at) {
           const date = new Date(Number(profile.delete_at));
@@ -255,10 +261,12 @@
     const payload = {
       display_name: form.elements.displayName?.value.trim() || null,
       status_text: form.elements.statusText?.value.trim() || null,
-      bio: form.elements.bio?.value || null
+      bio: form.elements.bio?.value || null,
+      theme: form.elements.theme?.value || "system"
     };
     api("/api/profile/me", { method: "PATCH", body: payload })
       .then(() => {
+        setThemePreference(payload.theme);
         status.textContent = "Saved to profile";
       })
       .catch(() => {
