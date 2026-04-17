@@ -82,6 +82,11 @@ const HEADER_HTML = `
       </div>
     </div>
   </div>
+  <div class="window-controls" id="windowControls" hidden aria-label="Window controls">
+    <button type="button" class="windowControl" data-window-action="minimize" aria-label="Minimize window">−</button>
+    <button type="button" class="windowControl" data-window-action="maximize" aria-label="Maximize window">▢</button>
+    <button type="button" class="windowControl windowControl-close" data-window-action="close" aria-label="Close window">×</button>
+  </div>
 </header>
 `;
 export async function mountTopbar(page){
@@ -89,6 +94,25 @@ export async function mountTopbar(page){
   const username = localStorage.getItem("username");
   const role = localStorage.getItem("role");
   document.body.insertAdjacentHTML("afterbegin", HEADER_HTML);
+  if (window.electron) {
+    document.body.classList.add("desktop-app");
+    const windowControls = document.getElementById("windowControls");
+    if (windowControls) {
+      windowControls.hidden = false;
+      windowControls.querySelectorAll("[data-window-action]").forEach((button) => {
+        button.addEventListener("click", async () => {
+          const action = button.dataset.windowAction;
+          if (action === "minimize") {
+            await window.electron.windowMinimize();
+          } else if (action === "maximize") {
+            await window.electron.windowToggleMaximize();
+          } else if (action === "close") {
+            await window.electron.windowClose();
+          }
+        });
+      });
+    }
+  }
   const navToggle = document.getElementById("navToggle");
   if (navToggle) {
     navToggle.addEventListener("click", () => {

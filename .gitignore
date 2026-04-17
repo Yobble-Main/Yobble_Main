@@ -1,4 +1,6 @@
 /server/node_modules
+/desktop/node_modules
+/launcher/build
 /temp/
 /save/
 /server/package-lock.json

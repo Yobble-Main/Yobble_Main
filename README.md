@@ -13,6 +13,8 @@ Yobble is a unfinished game publishing platform with a web UI, API server, and d
 - `server/src` API server and websocket chat
 - `web_src` web frontend source (served/minified at runtime)
 - `temp/web-runtime` generated web runtime output
+- `desktop` Electron shell for the Windows launcher
+- `launcher` C++ bootstrapper that updates Electron dependencies and starts the desktop shell
 - `save/uploads/games` uploaded game builds
 - `save` data assets (TOS, item icons, levels)
 - `Client_linux` packaged Linux client assets
@@ -48,6 +50,18 @@ The AppImage build pulls from `Client_linux/` and produces `dist/Yobble.appimage
 ```sh
 scripts/build-appimage.sh 0.7.0
 ```
+
+## Windows desktop launcher
+The Windows launcher lives in `launcher/` and starts the Electron shell from `desktop/`.
+
+```sh
+cmake -S launcher -B launcher/build
+cmake --build launcher/build --config Release
+```
+
+The launcher expects `npm` and a working Node.js toolchain on `PATH`. It looks for a `desktop/` folder next to the EXE, installs or updates the Electron desktop dependencies in that folder, and then launches the Electron shell.
+
+Set `YOBBLE_LIVE_URL` before launching if your live platform is not `https://yobble.live`. The Electron shell opens that URL and routes in-app game launches through the same origin.
 
 ## Android build
 The Android app lives in `Android src/Yobble/`.
