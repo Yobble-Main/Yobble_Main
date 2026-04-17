@@ -31,6 +31,12 @@ const BAD_WORDS = [
   "twat",
   "wanker"
 ];
+const ROOM_NAME_HIGH_PATTERNS = [
+  /\b(kill\s+yourself|kys)\b/i,
+  /\b(rape|rapist|pedo|pedophile|csam)\b/i,
+  /\b(doxx|doxxing|swat)\b/i,
+  /\b(heil\s+hitler|gas\s+the\s+jews|white\s+power)\b/i
+];
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -62,6 +68,11 @@ function hasBlockedWord(value) {
   if (!value) return false;
   badWordPattern.lastIndex = 0;
   return badWordPattern.test(String(value));
+}
+
+function hasHighRiskRoomName(value) {
+  const text = String(value || "");
+  return ROOM_NAME_HIGH_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 export async function evaluateChatTextModeration(text) {
@@ -120,6 +131,168 @@ export async function evaluateChatTextModeration(text) {
       aiResult: cleanResult
     };
   }
+}
+
+export async function evaluateChatRoomNameModeration(name) {
+  const raw = String(name || "").trim();
+  const cleanResult = {
+    blocked: false,
+    severity: ModerationSeverity.NONE,
+    reason: "",
+    source: null,
+    categories: []
+  };
+
+  if (!raw) {
+    return cleanResult;
+  }
+
+  if (hasHighRiskRoomName(raw)) {
+    return {
+      blocked: true,
+      severity: ModerationSeverity.HIGH,
+      reason: "high_risk_room_name",
+      source: "word_filter",
+      categories: ["high_risk_name"]
+    };
+  }
+
+  if (hasBlockedWord(raw)) {
+    return {
+      blocked: true,
+      severity: ModerationSeverity.MEDIUM,
+      reason: "blocked_word",
+      source: "word_filter",
+      categories: ["profanity"]
+    };
+  }
+
+  try {
+    const aiResult = await moderateText(raw);
+    if (aiResult.flagged && aiResult.severity !== ModerationSeverity.NONE) {
+      return {
+        blocked: true,
+        severity: aiResult.severity,
+        reason: aiResult.reason || "content_policy",
+        source: "ai_moderation",
+        categories: aiResult.categories || []
+      };
+    }
+    return cleanResult;
+  } catch (err) {
+    console.error("[ai-moderation] room moderation failed:", err?.message);
+    return cleanResult;
+  }
+}
+
+async function hasActivePermaBan(userId) {
+  const ban = await get(
+    `SELECT id
+     FROM bans
+     WHERE target_type='user'
+       AND target_id=?
+       AND lifted_at IS NULL
+       AND expires_at IS NULL
+     LIMIT 1`,
+    [userId]
+  );
+  return !!ban;
+}
+
+async function applyPermaBan(userId, reason) {
+  const ts = Date.now();
+  const banReason = String(reason || "chat_room_abuse").slice(0, 500);
+  if (await hasActivePermaBan(userId)) {
+    await run(
+      `UPDATE users
+       SET is_banned=1,
+           ban_reason=COALESCE(?, ban_reason),
+           banned_at=COALESCE(banned_at, ?)
+       WHERE id=?`,
+      [banReason, ts, userId]
+    );
+    return { banned: false, reason: banReason, banned_at: ts };
+  }
+
+  await run(
+    `INSERT INTO bans(target_type, target_id, reason, created_at, expires_at, lifted_at, lift_reason)
+     VALUES('user', ?, ?, ?, NULL, NULL, NULL)`,
+    [userId, banReason, ts]
+  );
+  await run(
+    `UPDATE users
+     SET is_banned=1,
+         ban_reason=?,
+         banned_at=?
+     WHERE id=?`,
+    [banReason, ts, userId]
+  );
+  return { banned: true, reason: banReason, banned_at: ts };
+}
+
+async function banRoomCreatorIfNeeded(createdBy, reason) {
+  const username = String(createdBy || "").trim();
+  if (!username || username === "system") {
+    return null;
+  }
+
+  const user = await get(
+    "SELECT id, username FROM users WHERE username = ? LIMIT 1",
+    [username]
+  );
+  if (!user) return null;
+
+  return applyPermaBan(user.id, reason);
+}
+
+async function deleteChatRoom(channelUuid) {
+  const room = await getChannelById(channelUuid);
+  if (!room) return false;
+  await run(
+    "DELETE FROM chat_messages WHERE channel_uuid = ? OR channel = ?",
+    [channelUuid, room.name]
+  );
+  await run("DELETE FROM chat_channels WHERE channel_uuid = ?", [channelUuid]);
+  return true;
+}
+
+async function sweepBadRoomNames() {
+  const rooms = await all(
+    `SELECT channel_uuid, name, created_by
+     FROM chat_channels
+     WHERE is_dm = 0
+     ORDER BY created_at ASC`
+  );
+
+  const removed = [];
+  const banned = [];
+  for (const room of rooms) {
+    const verdict = await evaluateChatRoomNameModeration(room.name);
+    if (!verdict.blocked) continue;
+
+    await deleteChatRoom(room.channel_uuid);
+    removed.push({
+      id: room.channel_uuid,
+      name: room.name,
+      severity: verdict.severity,
+      reason: verdict.reason
+    });
+
+    if (verdict.severity === ModerationSeverity.HIGH) {
+      const banResult = await banRoomCreatorIfNeeded(
+        room.created_by,
+        `bad_room_name:${room.name}:${verdict.reason || "content_policy"}`
+      );
+      if (banResult?.banned) {
+        banned.push({
+          username: room.created_by,
+          reason: banResult.reason
+        });
+      }
+    }
+  }
+
+  return { removed, banned };
 }
 
 export async function scanAndRemoveBadChatMessages({ channelUuid = null, limit = 500 } = {}) {
@@ -368,6 +541,18 @@ export function createChatRouter({ projectRoot }) {
         .catch((err) => {
           console.error("[chat] startup moderation sweep failed:", err);
         });
+      sweepBadRoomNames()
+        .then((result) => {
+          if (result.removed.length > 0) {
+            console.log(`[chat] removed ${result.removed.length} bad rooms during startup sweep`);
+          }
+          if (result.banned.length > 0) {
+            console.log(`[chat] permanently banned ${result.banned.length} accounts for bad room names`);
+          }
+        })
+        .catch((err) => {
+          console.error("[chat] startup room moderation sweep failed:", err);
+        });
     }, 0);
   }
 
@@ -393,6 +578,27 @@ export function createChatRouter({ projectRoot }) {
     if (!name) return res.status(400).json({ error: "invalid_room" });
     if (name.length > 32) return res.status(400).json({ error: "name_too_long" });
     if (name.startsWith("dm:")) return res.status(400).json({ error: "invalid_room" });
+
+    const verdict = await evaluateChatRoomNameModeration(name);
+    if (verdict.blocked) {
+      if (verdict.severity === ModerationSeverity.HIGH) {
+        const banResult = await applyPermaBan(
+          req.user.uid,
+          `bad_room_name:${name}:${verdict.reason || "content_policy"}`
+        );
+        return res.status(403).json({
+          error: "account_banned",
+          reason: banResult.reason,
+          banned_at: banResult.banned_at
+        });
+      }
+
+      return res.status(400).json({
+        error: "room_name_blocked",
+        reason: verdict.reason || "content_policy",
+        severity: verdict.severity
+      });
+    }
 
     try {
       const ts = Date.now();

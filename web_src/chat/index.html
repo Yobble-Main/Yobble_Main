@@ -267,6 +267,18 @@ async function readJson(res) {
   }
 }
 
+function redirectForAuthState(data) {
+  if (data?.error === "account_banned") {
+    window.location.href = "/Permanetly-Banned.html";
+    return true;
+  }
+  if (data?.error === "account_timed_out") {
+    window.location.href = "/temporay-banned";
+    return true;
+  }
+  return false;
+}
+
 function describeInviteError(res, data) {
   if (data?.error === "expired") return "Invite expired.";
   if (data?.error === "room_unavailable") return "Room unavailable.";
@@ -379,8 +391,11 @@ async function fetchRooms(options) {
   const opts = options || {};
   const shouldSwitch = opts.shouldSwitch !== false;
   const res = await fetch(API.rooms, { headers: authHeaders() });
-  if (!res.ok) return;
-  const data = await res.json();
+  const data = await readJson(res);
+  if (!res.ok) {
+    if (res.status === 403 && redirectForAuthState(data)) return;
+    return;
+  }
   rooms = Array.isArray(data.rooms) ? data.rooms : [];
   renderRoomList();
   if (!rooms.length) {
@@ -771,8 +786,16 @@ async function createRoom() {
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ name })
     });
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await readJson(res);
+    if (!res.ok) {
+      if (res.status === 403 && redirectForAuthState(data)) return;
+      channelMeta.textContent = data?.reason
+        ? "Room blocked: " + data.reason
+        : data?.error === "room_name_blocked"
+        ? "Room name blocked."
+        : "Room creation failed.";
+      return;
+    }
     rooms = Array.isArray(data.rooms) ? data.rooms : rooms;
     renderRoomList();
     if (data.created && data.created.id) {
