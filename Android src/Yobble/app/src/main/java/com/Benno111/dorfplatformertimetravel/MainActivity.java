@@ -1,6 +1,7 @@
 package com.Benno111.dorfplatformertimetravel;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
@@ -15,6 +16,7 @@ import android.view.View;
 import android.view.KeyEvent;
 import android.util.Base64;
 import android.util.Log;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -35,6 +37,7 @@ import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
+    private static final int FILE_CHOOSER_REQUEST = 1002;
 
     private WebView webView;
     private ViewGroup webViewContainer;
@@ -42,6 +45,7 @@ public class MainActivity extends Activity {
     private String initialLocalStorageSnapshot;
     private boolean hasRestoredLocalStorage = false;
     private WebViewAssetLoader assetLoader;
+    private ValueCallback<Uri[]> fileChooserCallback;
 
     private final WebViewClient externalTabClient = new WebViewClient() {
         @Override
@@ -150,6 +154,25 @@ public class MainActivity extends Activity {
                         + consoleMessage.sourceId() + ":" + consoleMessage.lineNumber() + ")");
                 return super.onConsoleMessage(consoleMessage);
             }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback,
+                    FileChooserParams fileChooserParams) {
+                // Cancel any previous pending callback to avoid leaking it
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                    fileChooserCallback = null;
+                }
+                fileChooserCallback = filePathCallback;
+                Intent intent = fileChooserParams.createIntent();
+                try {
+                    startActivityForResult(intent, FILE_CHOOSER_REQUEST);
+                } catch (ActivityNotFoundException e) {
+                    fileChooserCallback = null;
+                    return false;
+                }
+                return true;
+            }
         });
 
         // ✅ Load game HTML
@@ -191,6 +214,20 @@ public class MainActivity extends Activity {
         }
         GameWebViewHolder.get(this).releaseToAppContext();
         super.onDestroy();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == FILE_CHOOSER_REQUEST) {
+            if (fileChooserCallback == null) return;
+            Uri[] results = null;
+            if (resultCode == Activity.RESULT_OK) {
+                results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
+            }
+            fileChooserCallback.onReceiveValue(results);
+            fileChooserCallback = null;
+        }
     }
 
     private void hideSystemUI() {
@@ -297,11 +334,18 @@ public class MainActivity extends Activity {
     private void ensureLegacyStoragePermission() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        java.util.List<String> needed = new java.util.ArrayList<>();
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                == PackageManager.PERMISSION_GRANTED) {
-            return;
+                != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }
-        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1001);
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+        }
+        if (!needed.isEmpty()) {
+            ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), 1001);
+        }
     }
 
     private String guessMimeType(Uri uri) {
