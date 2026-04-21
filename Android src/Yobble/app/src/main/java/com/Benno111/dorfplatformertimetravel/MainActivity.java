@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.KeyEvent;
 import android.util.Base64;
 import android.util.Log;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -35,6 +36,8 @@ import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
+    private static final int REQUEST_FILE_CHOOSER = 1002;
+    private static final int REQUEST_READ_STORAGE  = 1003;
 
     private WebView webView;
     private ViewGroup webViewContainer;
@@ -42,6 +45,9 @@ public class MainActivity extends Activity {
     private String initialLocalStorageSnapshot;
     private boolean hasRestoredLocalStorage = false;
     private WebViewAssetLoader assetLoader;
+
+    /** Holds the callback provided by WebView when a file-input is tapped. */
+    private ValueCallback<Uri[]> fileChooserCallback;
 
     private final WebViewClient externalTabClient = new WebViewClient() {
         @Override
@@ -140,6 +146,31 @@ public class MainActivity extends Activity {
                 WebView.WebViewTransport transport = (WebView.WebViewTransport) resultMsg.obj;
                 transport.setWebView(newWebView);
                 resultMsg.sendToTarget();
+                return true;
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                    FileChooserParams params) {
+                // Cancel any previous callback that was never resolved
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                }
+                fileChooserCallback = callback;
+
+                // On Android < 13 we may need READ_EXTERNAL_STORAGE before showing the picker
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                        && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                        && ActivityCompat.checkSelfPermission(MainActivity.this,
+                                Manifest.permission.READ_EXTERNAL_STORAGE)
+                                != PackageManager.PERMISSION_GRANTED) {
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.READ_EXTERNAL_STORAGE},
+                            REQUEST_READ_STORAGE);
+                    return true;
+                }
+
+                launchFilePicker(params);
                 return true;
             }
 
@@ -345,6 +376,57 @@ public class MainActivity extends Activity {
         }
         String guessed = guessMimeType(uri);
         return guessed != null ? guessed : "application/octet-stream";
+    }
+
+    private void launchFilePicker(WebChromeClient.FileChooserParams params) {
+        Intent intent = (params != null) ? params.createIntent() : null;
+        if (intent == null) {
+            intent = new Intent(Intent.ACTION_GET_CONTENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType("*/*");
+        }
+        try {
+            startActivityForResult(Intent.createChooser(intent, "Choose file"), REQUEST_FILE_CHOOSER);
+        } catch (Exception e) {
+            fileChooserCallback.onReceiveValue(null);
+            fileChooserCallback = null;
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_FILE_CHOOSER) {
+            if (fileChooserCallback == null) return;
+            Uri[] results = null;
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                String dataString = data.getDataString();
+                if (dataString != null) {
+                    results = new Uri[]{Uri.parse(dataString)};
+                } else if (data.getClipData() != null) {
+                    int count = data.getClipData().getItemCount();
+                    results = new Uri[count];
+                    for (int i = 0; i < count; i++) {
+                        results[i] = data.getClipData().getItemAt(i).getUri();
+                    }
+                }
+            }
+            fileChooserCallback.onReceiveValue(results);
+            fileChooserCallback = null;
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (requestCode == REQUEST_READ_STORAGE) {
+            // Permission granted or denied — either way open the picker now
+            if (fileChooserCallback != null) {
+                launchFilePicker(null);
+            }
+        } else {
+            super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        }
     }
 
     private void exportLocalStorageSnapshot() {
