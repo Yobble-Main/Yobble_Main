@@ -1,12 +1,15 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
+import { fileURLToPath } from "url";
 import { all, get } from "../db.js";
 import { requireAuth } from "../auth.js";
 
 export const gamesRouter = express.Router();
 
-const PROJECT_ROOT = path.resolve(process.cwd(), "server", "..");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, "../../..");
 const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
 
 /* -----------------------------
