@@ -149,10 +149,18 @@ gameHostingRouter.post("/upload", requireAuth, upload.single("zip"), async (req,
   const isPrivileged = (req.user.role === "admin" || req.user.role === "moderator");
   const approval_status = isPrivileged ? "approved" : "pending";
 
-  // Insert version if not exists
+  // Insert or update version (upsert: re-uploading the same version string resets the record)
   await run(
-    `INSERT OR IGNORE INTO game_versions(game_id,version,entry_html,created_at,is_published,approval_status,approved_by,approved_at)
-     VALUES(?,?,?,?,0,?,?,?)`,
+    `INSERT INTO game_versions(game_id,version,entry_html,created_at,is_published,approval_status,approved_by,approved_at)
+     VALUES(?,?,?,?,0,?,?,?)
+     ON CONFLICT(game_id,version) DO UPDATE SET
+       entry_html=excluded.entry_html,
+       created_at=excluded.created_at,
+       approval_status=excluded.approval_status,
+       approved_by=excluded.approved_by,
+       approved_at=excluded.approved_at,
+       is_published=0,
+       rejected_reason=NULL`,
     [game.id, version, entry_html, now, approval_status, isPrivileged ? req.user.uid : null, isPrivileged ? now : null]
   );
 
