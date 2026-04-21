@@ -372,25 +372,30 @@ gameHostingRouter.get("/playable-versions", requireAuth, async (req, res) => {
   const isPrivileged = req.user.role === "admin" || req.user.role === "moderator";
   if (isOwner || isPrivileged) {
     const rows = await all(
-      `SELECT version FROM game_versions WHERE game_id=? ORDER BY created_at DESC`,
+      `SELECT version, entry_html FROM game_versions WHERE game_id=? ORDER BY created_at DESC`,
       [g.id]
     );
-    return res.json({ versions: rows.map(r => r.version) });
+    return res.json({ versions: rows });
   }
 
   const rows = await all(
-    `SELECT version FROM game_versions
+    `SELECT version, entry_html FROM game_versions
      WHERE game_id=? AND is_published=1
      ORDER BY created_at DESC`,
     [g.id]
   );
-  const published = new Set(rows.map(r => r.version));
+  const publishedMap = new Map(rows.map(r => [r.version, r.entry_html]));
   const wlRows = await all(
-    `SELECT version FROM game_version_whitelist WHERE game_id=? AND user_id=?`,
+    `SELECT gv.version, gv.entry_html
+     FROM game_version_whitelist w
+     JOIN game_versions gv ON gv.game_id=w.game_id AND gv.version=w.version
+     WHERE w.game_id=? AND w.user_id=?`,
     [g.id, req.user.uid]
   );
-  for (const r of wlRows) published.add(r.version);
-  res.json({ versions: Array.from(published) });
+  for (const r of wlRows) {
+    if (!publishedMap.has(r.version)) publishedMap.set(r.version, r.entry_html);
+  }
+  res.json({ versions: Array.from(publishedMap, ([version, entry_html]) => ({ version, entry_html })) });
 });
 
 // Toggle custom level browser (owner/mod/admin)

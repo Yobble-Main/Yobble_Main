@@ -71,19 +71,28 @@ async function load(){
     return;
   }
   const g = gRes.game || gRes;
+  function normalizeVersions(raw) {
+    return raw.map(v => {
+      if (typeof v === "string") return { version: v, entry_html: null };
+      return { version: v.version || v.name || "", entry_html: v.entry_html || null };
+    }).filter(v => v.version);
+  }
   const vRes = await safeGet("/api/gamehosting/playable-versions?project=" + encodeURIComponent(project), null);
-  let versions = Array.isArray(vRes?.versions) ? vRes.versions : [];
+  let versions = normalizeVersions(Array.isArray(vRes?.versions) ? vRes.versions : []);
   if (!versions.length) {
     const fallback = await safeGet("/api/games/" + encodeURIComponent(project) + "/versions", []);
     const rawVersions = Array.isArray(fallback) ? fallback : (fallback.versions || []);
-    versions = [...new Set(rawVersions.map(v => {
-      if (typeof v === "string") return v;
-      return v?.version || v?.name || "";
-    }).filter(Boolean))];
+    const seen = new Set();
+    versions = normalizeVersions(rawVersions).filter(v => {
+      if (seen.has(v.version)) return false;
+      seen.add(v.version);
+      return true;
+    });
   }
-  const published = g.latest_version || versions[0] || "";
+  const entryHtmlMap = new Map(versions.map(v => [v.version, v.entry_html]));
+  const published = g.latest_version || versions[0]?.version || "";
   if (me && !(me.username === g.owner_username || ["admin","moderator"].includes(me?.role))) {
-    versions = versions.filter(Boolean);
+    versions = versions.filter(v => v.version);
   }
   const inLibRes = await safeGet("/api/library/has?project=" + encodeURIComponent(project), null);
   let inLib = !!inLibRes?.in_library;
@@ -128,11 +137,11 @@ async function load(){
   if(versions.length){
     for(const v of versions){
       const opt = document.createElement("option");
-      opt.value = v;
-      opt.textContent = v;
+      opt.value = v.version;
+      opt.textContent = v.version;
       sel.appendChild(opt);
     }
-    if(published && versions.includes(published)) sel.value = published;
+    if(published && versions.some(v => v.version === published)) sel.value = published;
   }else if(published){
     const opt = document.createElement("option");
     opt.value = published;
@@ -160,7 +169,7 @@ async function load(){
   playBtn.onclick = async ()=>{
     const version = sel.value;
     if(!version) return;
-    const entry = g.entry_html || "index";
+    const entry = entryHtmlMap.get(version) ?? g.entry_html ?? "index";
     let token = "";
     try{
       const t = await api.post("/api/launcher/token", { game_project: project });
