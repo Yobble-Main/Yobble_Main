@@ -28,12 +28,18 @@ async function load(){
       <div class="muted">status: ${v.approval_status}</div>
       ${v.rejected_reason ? `<div class="muted">reject: ${v.rejected_reason}</div>` : ""}
       <div class="muted">entry: ${v.entry_html}</div>
-      ${canPublish ? `<button class="primary" data-v="${v.version}" style="margin-top:10px">Publish / Rollback</button>` : ""}
+      ${canPublish && !isPublished ? `<button class="primary" data-v="${v.version}" data-action="publish" style="margin-top:10px">Publish</button>` : ""}
+      ${isPublished ? `<button class="secondary" data-v="${v.version}" data-action="unpublish" style="margin-top:10px">Unpublish</button>` : ""}
     `);
     const btn = d.querySelector("button");
     if(btn){
       btn.onclick = async ()=>{
-        await api.post("/api/gamehosting/publish", { project, version: btn.dataset.v });
+        const action = btn.dataset.action;
+        if(action === "unpublish"){
+          await api.post("/api/gamehosting/publish", { project, version: btn.dataset.v, published: false });
+        }else{
+          await api.post("/api/gamehosting/publish", { project, version: btn.dataset.v });
+        }
         await load();
       };
     }

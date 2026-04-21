@@ -149,16 +149,23 @@ gameHostingRouter.post("/upload", requireAuth, upload.single("zip"), async (req,
   const isPrivileged = (req.user.role === "admin" || req.user.role === "moderator");
   const approval_status = isPrivileged ? "approved" : "pending";
 
-  // Insert version if not exists
+  // Insert or update version (upsert: re-uploading the same version string resets the record)
   await run(
-    `INSERT OR IGNORE INTO game_versions(game_id,version,entry_html,created_at,is_published,approval_status,approved_by,approved_at)
-     VALUES(?,?,?,?,0,?,?,?)`,
+    `INSERT INTO game_versions(game_id,version,entry_html,created_at,is_published,approval_status,approved_by,approved_at)
+     VALUES(?,?,?,?,0,?,?,?)
+     ON CONFLICT(game_id,version) DO UPDATE SET
+       entry_html=excluded.entry_html,
+       created_at=excluded.created_at,
+       approval_status=excluded.approval_status,
+       approved_by=excluded.approved_by,
+       approved_at=excluded.approved_at,
+       is_published=0,
+       rejected_reason=NULL`,
     [game.id, version, entry_html, now, approval_status, isPrivileged ? req.user.uid : null, isPrivileged ? now : null]
   );
 
-  // If privileged, publish it immediately
+  // If privileged, publish this version immediately (without unpublishing others)
   if(isPrivileged){
-    await run("UPDATE game_versions SET is_published=0 WHERE game_id=?", [game.id]);
     await run("UPDATE game_versions SET is_published=1 WHERE game_id=? AND version=?", [game.id, version]);
   }
 
@@ -403,10 +410,11 @@ gameHostingRouter.post("/custom-levels-toggle", requireAuth, async (req, res) =>
   res.json({ ok: true, custom_levels_enabled: enabled ? 1 : 0 });
 });
 
-// Publish/Rollback (moderator/admin)
+// Publish/Unpublish (moderator/admin)
 gameHostingRouter.post("/publish", requireAuth, requireRole("moderator"), async (req,res)=>{
   const project = String(req.body?.project || "").trim();
   const version = String(req.body?.version || "").trim();
+  const published = req.body?.published !== false;
   if(!project || !version) return res.status(400).json({ error:"missing_fields" });
 
   const g = await get("SELECT id FROM games WHERE project=?", [project]);
@@ -417,9 +425,14 @@ gameHostingRouter.post("/publish", requireAuth, requireRole("moderator"), async 
     [g.id, version]
   );
   if(!v) return res.status(404).json({ error:"version_not_found" });
+
+  if(!published){
+    await run("UPDATE game_versions SET is_published=0 WHERE game_id=? AND version=?", [g.id, version]);
+    return res.json({ ok:true, published: false });
+  }
+
   if(v.approval_status !== "approved") return res.status(400).json({ error:"version_not_approved" });
 
-  await run("UPDATE game_versions SET is_published=0 WHERE game_id=?", [g.id]);
   await run("UPDATE game_versions SET is_published=1 WHERE game_id=? AND version=?", [g.id, version]);
 
   res.json({ ok:true });
@@ -439,12 +452,12 @@ gameHostingRouter.post("/publish-owner", requireAuth, async (req,res)=>{
   const isPrivileged = req.user.role === "admin" || req.user.role === "moderator";
   if(!isOwner && !isPrivileged) return res.status(403).json({ error:"forbidden_owner" });
 
+  if(!version) return res.status(400).json({ error:"missing_fields" });
+
   if(!published){
-    await run("UPDATE game_versions SET is_published=0 WHERE game_id=?", [g.id]);
+    await run("UPDATE game_versions SET is_published=0 WHERE game_id=? AND version=?", [g.id, version]);
     return res.json({ ok:true, published: false });
   }
-
-  if(!version) return res.status(400).json({ error:"missing_fields" });
 
   const v = await get(
     `SELECT approval_status FROM game_versions WHERE game_id=? AND version=?`,
@@ -453,7 +466,6 @@ gameHostingRouter.post("/publish-owner", requireAuth, async (req,res)=>{
   if(!v) return res.status(404).json({ error:"version_not_found" });
   if(v.approval_status !== "approved") return res.status(400).json({ error:"version_not_approved" });
 
-  await run("UPDATE game_versions SET is_published=0 WHERE game_id=?", [g.id]);
   await run("UPDATE game_versions SET is_published=1 WHERE game_id=? AND version=?", [g.id, version]);
 
   res.json({ ok:true, published: true });
