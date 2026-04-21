@@ -4,8 +4,9 @@
 
     <!-- Enable network access for online content -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- Legacy external write/read permissions for pre-Android 10 devices -->
+    <!-- Legacy external write permission for pre-Android 10 devices -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Read storage for file-upload picker on pre-Android 13 devices -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <!-- Granular media-read permissions for Android 13+ (API 33+) -->
