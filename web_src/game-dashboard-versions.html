@@ -81,9 +81,11 @@ if(!project){
     gameproject.textContent = `project ${g.project || project}`;
     dashboardPage.value = "versions";
     const latest = versions[0]?.version || "—";
-    const published = versions.find(v => v.is_published)?.version || "—";
+    const publishedCount = versions.filter(v => v.is_published).length;
     latestVersion.textContent = `Latest ${latest}`;
-    publishedVersion.textContent = `Published ${published}`;
+    publishedVersion.textContent = publishedCount > 1
+      ? `Published ${publishedCount} versions`
+      : `Published ${versions.find(v => v.is_published)?.version || "—"}`;
     root.innerHTML = `
       <form id="${uploadFormId}" style="margin-bottom:16px">
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
@@ -158,8 +160,9 @@ if(!project){
       });
       root.querySelectorAll("[data-unpublish]").forEach(btn => {
         btn.addEventListener("click", async () => {
+          const v = btn.getAttribute("data-unpublish");
           try{
-            await api.post("/api/gamehosting/publish-owner", { project, published: false });
+            await api.post("/api/gamehosting/publish-owner", { project, version: v, published: false });
             location.reload();
           }catch{
             btn.textContent = "Failed";
