@@ -1,5 +1,14 @@
 import { getMe } from "./state.js";
 import { logout } from "./auth.js";
+function escapeHtml(v){
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }[c]));
+}
 function navLink(href, label, id, activeId){
   const a = document.createElement("a");
   a.href = href;
@@ -11,6 +20,10 @@ export async function mountShell(activeId){
   const me = await getMe();
   const role = me?.role || "user";
   const isStaff = role === "admin" || role === "moderator";
+  const avatar = escapeHtml(me?.avatar_url || "/assets/logo.svg");
+  const displayName = escapeHtml(me?.display_name || me?.username || "Account");
+  const handle = escapeHtml(me?.username ? `@${me.username}` : "@account");
+  const status = escapeHtml(me?.status_text || "Mobile profile ready.");
   document.body.innerHTML = `
     <div class="app">
       <aside class="sidebar">
@@ -37,6 +50,14 @@ export async function mountShell(activeId){
             <span class="pill">Yobble Dollar</span>
           </div>
           <div class="row">
+            <div class="accountSummary accountSummary--inline">
+              <img class="accountAvatar accountAvatar--large" src="${avatar}" alt="${displayName}">
+              <div class="accountSummaryText">
+                <div class="accountSummaryName">${displayName}</div>
+                <div class="accountSummaryHandle">${handle}</div>
+                <div class="accountSummaryStatus">${status}</div>
+              </div>
+            </div>
             <a class="pill" href="/report">Report</a>
             ${isStaff ? `<a class="pill" href="/mod/dashboard">Moderation</a>` : ``}
             <button class="secondary" id="logoutBtn">Logout</button>

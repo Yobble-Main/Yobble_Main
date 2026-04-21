@@ -14,6 +14,10 @@ export async function mountTopbar(active){
   let me = null;
   try{ me = (await api("/api/profile/me")).profile; }catch{}
   const isAdmin = me?.role === "admin";
+  const avatar = me?.avatar_url || "/assets/logo.svg";
+  const displayName = me?.display_name || me?.username || "Account";
+  const handle = me?.username ? `@${me.username}` : "@account";
+  const status = me?.status_text || "Tap profile to manage your account.";
   const links = [
     ["Home","/index","home"],
     ["Games","/games","games"],
@@ -29,6 +33,14 @@ export async function mountTopbar(active){
     <div class="topbar">
       <div class="brand">benno111<span>engene</span></div>
       <div class="nav">
+        <div class="accountSummary accountSummary--inline">
+          <img class="accountAvatar accountAvatar--large" src="${htmlEscape(avatar)}" alt="${htmlEscape(displayName)}">
+          <div class="accountSummaryText">
+            <div class="accountSummaryName">${htmlEscape(displayName)}</div>
+            <div class="accountSummaryHandle">${htmlEscape(handle)}</div>
+            <div class="accountSummaryStatus">${htmlEscape(status)}</div>
+          </div>
+        </div>
         ${links.map(([t,href,key])=>`<a class="${key===active?"active":""}" href="${href}">${t}</a>`).join("")}
         <a href="#" id="btnLogout">Logout</a>
       </div>

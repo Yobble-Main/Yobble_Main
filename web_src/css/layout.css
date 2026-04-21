@@ -39,6 +39,47 @@
   background: rgba(110,168,254,.14);
   border-color: rgba(110,168,254,.35);
 }
+.accountSummary{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  min-width:0;
+}
+.accountSummaryText{
+  display:grid;
+  gap:2px;
+  min-width:0;
+}
+.accountSummaryName{
+  font-weight:800;
+  line-height:1.1;
+}
+.accountSummaryHandle,
+.accountSummaryStatus{
+  font-size:12px;
+  color:var(--muted);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  max-width:220px;
+}
+.accountSummary--inline{
+  padding:8px 10px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:rgba(255,255,255,.04);
+}
+.accountAvatar{
+  flex:0 0 auto;
+  object-fit:cover;
+  border:1px solid var(--border);
+  background:#0c0f1d;
+}
+.accountAvatar--large{
+  width:40px;
+  height:40px;
+  border-radius:50%;
+}
 .main{
   flex:1;
   display:flex;
@@ -157,4 +198,14 @@
   .sidebar{ display:none; }
   .container{ padding: 18px; }
   .content{ padding: 18px; }
+  .topbar{flex-wrap:wrap;gap:12px;height:auto;padding:14px 16px}
+  .nav{width:100%}
+  .accountSummary--inline{
+    width:100%;
+    order:-1;
+  }
+  .accountSummaryStatus{
+    white-space:normal;
+    max-width:none;
+  }
 }

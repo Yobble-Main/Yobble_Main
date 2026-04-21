@@ -77,10 +77,19 @@ const HEADER_HTML = `
   <div class="header-right" id="headerRight">
     <div class="navDropdown userDropdown">
       <button class="navDropdownToggle" type="button" aria-expanded="false">
+        <img class="accountAvatar accountAvatar--small" id="headerAvatar" alt="" hidden>
         <span id="headerUsername">Account</span>
         <span class="navDropdownArrow" aria-hidden="true">▾</span>
       </button>
       <div class="navDropdownMenu" role="menu">
+        <div class="accountSummary" id="accountSummary" hidden>
+          <img class="accountAvatar accountAvatar--large" id="accountAvatarLarge" alt="">
+          <div class="accountSummaryText">
+            <div class="accountSummaryName" id="accountName">Account</div>
+            <div class="accountSummaryHandle" id="accountHandle">@username</div>
+            <div class="accountSummaryStatus" id="accountStatus">Manage your profile from anywhere.</div>
+          </div>
+        </div>
         <a href="/profile" role="menuitem">Profile</a>
         <a href="/User-Settings" role="menuitem">User settings</a>
         <a href="#" id="logoutBtn" role="menuitem">Logout</a>
@@ -134,8 +143,43 @@ export async function mountTopbar(page){
   }
   const headerRight = document.getElementById("headerRight");
   const headerUsername = document.getElementById("headerUsername");
+  const headerAvatar = document.getElementById("headerAvatar");
+  const accountSummary = document.getElementById("accountSummary");
+  const accountAvatarLarge = document.getElementById("accountAvatarLarge");
+  const accountName = document.getElementById("accountName");
+  const accountHandle = document.getElementById("accountHandle");
+  const accountStatus = document.getElementById("accountStatus");
   if (token && headerUsername) {
     headerUsername.textContent = username || "Account";
+    try {
+      const profileRes = await fetch("/api/profile/me", {
+        headers: { Authorization: "Bearer " + token }
+      });
+      if (profileRes.ok) {
+        const data = await profileRes.json();
+        const profile = data?.profile || data || {};
+        const displayName = profile.display_name || profile.username || username || "Account";
+        const handle = profile.username ? `@${profile.username}` : `@${username || "account"}`;
+        const status = profile.status_text || "Manage your profile from anywhere.";
+        const avatar = profile.avatar_url || "/assets/logo.svg";
+        headerUsername.textContent = displayName;
+        if (headerAvatar) {
+          headerAvatar.src = avatar;
+          headerAvatar.alt = displayName;
+          headerAvatar.hidden = false;
+        }
+        if (accountSummary) accountSummary.hidden = false;
+        if (accountAvatarLarge) {
+          accountAvatarLarge.src = avatar;
+          accountAvatarLarge.alt = displayName;
+        }
+        if (accountName) accountName.textContent = displayName;
+        if (accountHandle) accountHandle.textContent = handle;
+        if (accountStatus) accountStatus.textContent = status;
+      }
+    } catch {
+      if (accountSummary) accountSummary.hidden = false;
+    }
   } else if (headerRight) {
     headerRight.remove();
   }

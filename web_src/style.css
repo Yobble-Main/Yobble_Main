@@ -116,6 +116,63 @@ body.desktop-app .window-controls{
   border-color:color-mix(in srgb, var(--danger) 80%, transparent);
   background:color-mix(in srgb, var(--danger) 18%, transparent);
 }
+.accountAvatar{
+  flex:0 0 auto;
+  object-fit:cover;
+  background:var(--surface);
+  border:1px solid var(--border);
+}
+.accountAvatar--small{
+  width:28px;
+  height:28px;
+  border-radius:50%;
+}
+.accountAvatar--large{
+  width:44px;
+  height:44px;
+  border-radius:50%;
+}
+.accountSummary{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  min-width:0;
+}
+.accountSummaryText{
+  display:grid;
+  gap:2px;
+  min-width:0;
+}
+.accountSummaryName{
+  font-weight:700;
+  line-height:1.1;
+}
+.accountSummaryHandle,
+.accountSummaryStatus{
+  font-size:12px;
+  color:var(--muted);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  max-width:240px;
+}
+.accountSummaryStatus{
+  max-width:320px;
+}
+.accountSummary--inline{
+  padding:8px 10px;
+  border:1px solid var(--border);
+  border-radius:14px;
+  background:color-mix(in srgb, var(--surface) 82%, transparent);
+}
+.userDropdown .accountSummary{
+  display:flex;
+  margin:8px;
+  padding:10px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:color-mix(in srgb, var(--surface) 92%, transparent);
+}
 .userDropdown .navDropdownMenu{left:auto;right:0}
 @media (max-width: 1100px){
   .navLabel-full{display:none}
@@ -367,6 +424,14 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
   #mainNav{order:4;width:100%;display:none;flex-direction:column;gap:6px;padding:6px 0}
   #mainNav a{white-space:nowrap;padding:6px 8px;border-radius:8px}
   body.nav-open #mainNav{display:flex}
+  .accountSummary--inline{
+    width:100%;
+    order:-1;
+  }
+  .accountSummaryStatus{
+    white-space:normal;
+    max-width:none;
+  }
   #walletBalance{margin-left:0;order:3}
   main{margin:16px auto 0;padding:0 14px}
   .grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
@@ -374,10 +439,29 @@ input::placeholder,textarea::placeholder{color:var(--muted)}
   .dropdown{right:12px;left:12px;width:auto}
   .hero{grid-template-columns:1fr}
   .auth-shell{grid-template-columns:1fr}
+  .profile-hero{
+    gap:18px;
+  }
+  .profile-hero-head{
+    gap:12px;
+  }
+  .profile-avatar{
+    width:56px;
+    height:56px;
+  }
+  .profile-hero-actions{
+    justify-items:start;
+  }
 }
 @media (max-width: 520px){
   nav a{font-size:13px}
   .pill{font-size:11px}
+  .accountSummary{
+    align-items:flex-start;
+  }
+  .accountSummaryStatus{
+    font-size:11px;
+  }
 }
 .form-field{display:grid;gap:6px}.checkbox{display:inline-flex;align-items:center;gap:8px}input[type="checkbox"],input[type="radio"]{accent-color:var(--accent);width:16px;height:16px}input[type="file"]{padding:6px}input[type="file"]::file-selector-button{border:1px solid var(--border);background:var(--card);color:var(--text);padding:6px 10px;border-radius:8px;cursor:pointer;margin-right:8px}input[type="file"]::file-selector-button:hover{border-color:color-mix(in srgb, var(--accent) 60%, transparent);box-shadow:0 8px 16px color-mix(in srgb, var(--bg) 25%, transparent)}
 
