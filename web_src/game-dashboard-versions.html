@@ -94,6 +94,7 @@ if(!project){
     const res = await api.get("/api/gamehosting/versions?project=" + encodeURIComponent(project));
     const g = res.game || {};
     const versions = res.versions || [];
+    const canManage = !!res.can_manage;
     gameTitle.textContent = g.title || "Untitled";
     gameDesc.textContent = g.description || "No description yet.";
     gameproject.textContent = `project ${g.project || project}`;
@@ -155,6 +156,7 @@ if(!project){
                 ${v.approval_status === "rejected"
                   ? `<button class="badge accent" data-resubmit="${escapeHtml(v.version)}">Resubmit</button>`
                   : ""}
+                ${canManage ? `<button class="badge accent" data-backup="${escapeHtml(v.version)}">Backup</button>` : ""}
                 <button class="badge" data-whitelist="${escapeHtml(v.version)}">Whitelist</button>
                 <button class="badge" data-delete="${escapeHtml(v.version)}">Delete</button>
               </td>
@@ -213,6 +215,43 @@ if(!project){
             location.reload();
           }catch{
             btn.textContent = "Failed";
+          }
+        });
+      });
+      root.querySelectorAll("[data-backup]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const v = btn.getAttribute("data-backup");
+          const token = localStorage.getItem("token");
+          const url = `/api/gamehosting/version/backup?project=${encodeURIComponent(project)}&version=${encodeURIComponent(v)}`;
+          btn.textContent = "Saving...";
+          btn.disabled = true;
+          try{
+            const response = await fetch(url, {
+              headers: token ? { Authorization: "Bearer " + token } : {}
+            });
+            if (!response.ok) {
+              throw new Error(await response.text());
+            }
+            const blob = await response.blob();
+            const disposition = response.headers.get("content-disposition") || "";
+            const match = disposition.match(/filename="?([^"]+)"?/i);
+            const filename = match?.[1] || `${project}-${v}.zip`;
+            const objectUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = objectUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+            btn.textContent = "Saved";
+            setTimeout(() => {
+              btn.textContent = "Backup";
+              btn.disabled = false;
+            }, 1000);
+          }catch{
+            btn.textContent = "Failed";
+            btn.disabled = false;
           }
         });
       });

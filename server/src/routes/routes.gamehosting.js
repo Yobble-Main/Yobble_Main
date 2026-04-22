@@ -2,6 +2,7 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { spawn } from "child_process";
 import unzipper from "unzipper";
 import { requireAuth, requireRole } from "../auth.js";
 import { get, run, all } from "../db.js";
@@ -34,6 +35,58 @@ function safeVersionPath(baseDir, project, version){
     throw new Error("unsafe_path");
   }
   return resolved;
+}
+
+function shellQuote(value){
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function runProcess(command, args, options = {}){
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, args, {
+      stdio: "ignore",
+      ...options
+    });
+    proc.on("error", reject);
+    proc.on("exit", (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${command} exited with code ${code}`));
+      }
+    });
+  });
+}
+
+async function ensureVersionBackupZip(sourceDir, backupZipPath){
+  if (fs.existsSync(backupZipPath)) {
+    return backupZipPath;
+  }
+
+  fs.mkdirSync(path.dirname(backupZipPath), { recursive: true });
+  const tempZipPath = path.join(TMP_DIR, `backup-${Date.now()}-${Math.random().toString(16).slice(2)}.zip`);
+
+  try{
+    if (process.platform === "win32") {
+      const sourcePattern = path.join(sourceDir, "*");
+      const psCommand = [
+        "$ErrorActionPreference = 'Stop';",
+        `Compress-Archive -Path ${shellQuote(sourcePattern)} -DestinationPath ${shellQuote(tempZipPath)} -Force`
+      ].join(" ");
+      await runProcess("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psCommand]);
+    } else {
+      await runProcess("zip", ["-qr", tempZipPath, "."], { cwd: sourceDir });
+    }
+
+    fs.copyFileSync(tempZipPath, backupZipPath);
+    return backupZipPath;
+  } finally {
+    try {
+      if (fs.existsSync(tempZipPath)) {
+        fs.unlinkSync(tempZipPath);
+      }
+    } catch {}
+  }
 }
 
 async function zipHasEntry(zipPath, entryHtml){
@@ -176,6 +229,13 @@ gameHostingRouter.post("/upload", requireAuth, upload.single("zip"), async (req,
     [req.user.uid, game.id, version, path.relative(PROJECT_ROOT, destDir), now]
   );
 
+  try{
+    const backupZipPath = path.join(destDir, "backup.zip");
+    fs.copyFileSync(req.file.path, backupZipPath);
+  }catch{
+    // Best-effort only. The extracted version is still usable if this fails.
+  }
+
   res.json({
     ok:true,
     project,
@@ -231,7 +291,7 @@ gameHostingRouter.get("/versions", requireAuth, async (req,res)=>{
     ? versions
     : versions.filter(v => v.approval_status === "approved");
 
-  res.json({ game: g, versions: filteredVersions, uploads });
+  res.json({ game: g, versions: filteredVersions, uploads, can_manage: isPrivileged || isOwner });
 });
 
 // Whitelist management (owner/mod/admin)
@@ -538,4 +598,37 @@ gameHostingRouter.post("/version/delete", requireAuth, async (req, res) => {
   await run("DELETE FROM game_uploads WHERE game_id=? AND version=?", [g.id, version]);
 
   res.json({ ok:true });
+});
+
+// Backup a version locally (owner/mod/admin)
+gameHostingRouter.get("/version/backup", requireAuth, async (req, res) => {
+  const project = String(req.query?.project || "").trim();
+  const version = String(req.query?.version || "").trim();
+  if(!project || !version) return res.status(400).json({ error:"missing_fields" });
+
+  const g = await get("SELECT id, owner_user_id FROM games WHERE project=?", [project]);
+  if(!g) return res.status(404).json({ error:"game_not_found" });
+
+  const isOwner = g.owner_user_id === req.user.uid;
+  const isPrivileged = req.user.role === "admin" || req.user.role === "moderator";
+  if(!isOwner && !isPrivileged) return res.status(403).json({ error:"forbidden_owner" });
+
+  const v = await get(
+    `SELECT version FROM game_versions WHERE game_id=? AND version=?`,
+    [g.id, version]
+  );
+  if(!v) return res.status(404).json({ error:"version_not_found" });
+
+  const SERVER_DIR = path.resolve(process.cwd());
+  const PROJECT_ROOT = path.resolve(SERVER_DIR, "..");
+  const GAME_STORAGE_DIR = path.join(PROJECT_ROOT, "save", "uploads", "games");
+
+  try{
+    const versionDir = safeVersionPath(GAME_STORAGE_DIR, project, version);
+    const backupZipPath = path.join(versionDir, "backup.zip");
+    await ensureVersionBackupZip(versionDir, backupZipPath);
+    res.download(backupZipPath, `${project}-${version}.zip`);
+  }catch{
+    return res.status(404).json({ error:"backup_unavailable" });
+  }
 });
