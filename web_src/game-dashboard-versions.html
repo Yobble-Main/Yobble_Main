@@ -5,6 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Game Dashboard - Versions</title>
 <link rel="stylesheet" href="/theme.css" rel="stylesheet"><link rel="stylesheet" href="/style.css">
+<style>
+  .progress {
+    width: 100%;
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(148, 163, 184, 0.22);
+    display: none;
+    margin-top: 12px;
+  }
+  .progress > div {
+    width: 0%;
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1d4ed8, #38bdf8);
+    transition: width 0.15s ease;
+  }
+</style>
 </head>
 <body>
 <main class="dash-wrap">
@@ -106,8 +124,8 @@ if(!project){
           <button class="badge accent" type="submit">Upload version</button>
           <span class="muted" id="uploadMsg"></span>
         </div>
-        <div class="progress" aria-hidden="true">
-          <span id="uploadProgress"></span>
+        <div class="progress" aria-hidden="true" id="uploadProgressWrap">
+          <div id="uploadProgress"></div>
         </div>
       </form>
       ${versions.length ? `
@@ -214,8 +232,10 @@ if(!project){
         uploadForm.addEventListener("submit", async (e) => {
           e.preventDefault();
           const msg = document.getElementById("uploadMsg");
+          const wrap = document.getElementById("uploadProgressWrap");
           const bar = document.getElementById("uploadProgress");
           msg.textContent = "";
+          if (wrap) wrap.style.display = "block";
           bar.style.width = "0%";
           const fd = new FormData(uploadForm);
           fd.set("project", project);
@@ -236,6 +256,7 @@ if(!project){
             xhr.addEventListener("load", () => {
               if (xhr.status >= 200 && xhr.status < 300) {
                 msg.textContent = "Uploaded.";
+                bar.style.width = "100%";
                 location.reload();
               } else {
                 msg.textContent = "Upload failed.";
@@ -244,9 +265,15 @@ if(!project){
             xhr.addEventListener("error", () => {
               msg.textContent = "Upload failed.";
             });
+            xhr.addEventListener("loadend", () => {
+              setTimeout(() => {
+                if (wrap) wrap.style.display = "none";
+              }, 400);
+            });
             xhr.send(fd);
           }catch{
             msg.textContent = "Upload failed.";
+            if (wrap) wrap.style.display = "none";
           }
         });
       }
