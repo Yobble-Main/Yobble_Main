@@ -1,4 +1,5 @@
 import { api } from "../api-pages/login.js";
+import { getSessionRedirectTarget } from "../auth.js";
 const u = document.getElementById("u");
 const p = document.getElementById("p");
 const totpWrap = document.getElementById("totp-wrap");
@@ -20,7 +21,7 @@ document.getElementById("btn").onclick = async ()=>{
       const until = r.user.timeout_until ? `?until=${encodeURIComponent(r.user.timeout_until)}` : "";
       location.href = `/temporay-banned${until}`;
     } else {
-      location.href = "/games";
+      location.href = getSessionRedirectTarget("/games");
     }
   }catch(e){
     if (e?.status === 401 && e?.data?.error === "totp_required") {

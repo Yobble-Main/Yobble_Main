@@ -114,8 +114,9 @@
 </div>
 
 <script type="module">
-  import { requireAuth } from "/js/auth.js";
+  import { redirectToLogin, requireAuth } from "/js/auth.js";
   import { mountTopbar } from "/js/layout.js";
+  window.redirectToLogin = redirectToLogin;
   await requireAuth();
   mountTopbar("uchat");
 </script>
@@ -195,7 +196,7 @@ const newRoomCount = document.getElementById("newRoomCount");
 const resetCreateRoomBtn = document.getElementById("resetCreateRoomBtn");
 
 if (!token) {
-  window.location.href = "/login";
+  window.location.href = window.redirectToLogin ? window.redirectToLogin(`${location.pathname}${location.search}${location.hash}`) : "/login";
 }
 
 function authHeaders() {

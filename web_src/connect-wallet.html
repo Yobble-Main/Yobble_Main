@@ -35,6 +35,7 @@
 import { mountTopbar } from "/js/layout.js";
 import { api } from "/js/api-pages/connect-wallet.js";
 import { requireAuth } from "/js/auth.js";
+await requireAuth();
 await mountTopbar("wallet");
 const walletStatus = document.getElementById("walletStatus");
 const walletHint = document.getElementById("walletHint");

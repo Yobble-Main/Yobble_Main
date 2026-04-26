@@ -1,6 +1,6 @@
 import { requireLogin } from "../auth.js";
 import { mountShell, setContent } from "../nav.js";
-requireLogin();
+await requireLogin();
 await mountShell("home");
 setContent(`
   <div class="grid">

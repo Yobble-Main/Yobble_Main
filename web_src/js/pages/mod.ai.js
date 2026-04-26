@@ -2,7 +2,7 @@
     import { mountShell, setContent } from "../nav.js";
     import { api } from "../api.js";
 
-    requireLogin();
+    await requireLogin();
     await mountShell("modai");
 
     setContent(`

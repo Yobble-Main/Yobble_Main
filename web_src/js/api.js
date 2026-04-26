@@ -1,7 +1,34 @@
-import { installAuthStorageGuards, rememberAuthState, repairAuthState } from "./auth-storage.js";
+import { clearAuthState, installAuthStorageGuards, rememberAuthState, repairAuthState } from "./auth-storage.js";
 
 installAuthStorageGuards();
 repairAuthState();
+
+function sanitizeRedirectTarget(target, fallback = "/index") {
+  const safeFallback = typeof fallback === "string" && fallback.startsWith("/") ? fallback : "/index";
+  const raw = typeof target === "string" ? target.trim() : "";
+  if (!raw) return safeFallback;
+  if (/^(?:[a-z][a-z0-9+\-.]*:)?\/\//i.test(raw)) return safeFallback;
+
+  const normalized = raw.startsWith("/") ? raw : `/${raw.replace(/^\/+/, "")}`;
+  try {
+    const resolved = new URL(normalized, location.origin);
+    if (resolved.origin !== location.origin) return safeFallback;
+    const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
+    if (path === "/login" || path.startsWith("/login?") || path === "/register" || path.startsWith("/register?")) {
+      return safeFallback;
+    }
+    return path || safeFallback;
+  } catch {
+    return safeFallback;
+  }
+}
+
+function redirectToLogin(target = `${location.pathname}${location.search}${location.hash}`) {
+  const redirect = sanitizeRedirectTarget(target, "/index");
+  const href = `/login?redirect=${encodeURIComponent(redirect)}`;
+  location.href = href;
+  return href;
+}
 
 function buildHeaders(token, extra, body){
   const headers = {
@@ -36,6 +63,23 @@ export async function api(url, opts = {}){
     username: data?.user?.username,
     role: data?.user?.role
   });
+  if ((res.status === 401 || res.status === 403) && !new URL(url, location.origin).pathname.startsWith("/api/auth/")) {
+    if (res.status === 403 && data?.error === "account_banned") {
+      clearAuthState();
+      location.href = "/Permanetly-Banned";
+    } else if (res.status === 403 && data?.error === "account_timed_out") {
+      clearAuthState();
+      const until = data?.until ? `?until=${encodeURIComponent(data.until)}` : "";
+      location.href = `/temporay-banned${until}`;
+    } else {
+      clearAuthState();
+      redirectToLogin();
+    }
+    const err = new Error(res.status === 401 ? "unauthorized" : "forbidden");
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
   if (!res.ok) {
     const msg = typeof data === "string" ? data : (data?.error || res.statusText);
     const err = new Error(msg || "Request failed");

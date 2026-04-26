@@ -1,4 +1,5 @@
-import { api } from "../api-pages/register.js";
+import { register } from "../auth.js";
+import { getSessionRedirectTarget } from "../auth.js";
 const u = document.getElementById("u");
 const p = document.getElementById("p");
 const err = document.getElementById("err");
@@ -22,12 +23,8 @@ async function registerAccount(){
   isSubmitting = true;
   err.textContent = "";
   try{
-    const r = await api.post("/api/auth/register", { username:u.value, password:p.value });
-    if(!r.token) throw new Error("no token");
-    localStorage.setItem("token", r.token);
-    if (r.user?.username) localStorage.setItem("username", r.user.username);
-    if (r.user?.role) localStorage.setItem("role", r.user.role);
-    location.href = "/games";
+    await register(u.value.trim(), "", p.value);
+    location.href = getSessionRedirectTarget("/games");
   }catch(e){
     if (typeof e === "string") {
       err.textContent = e;

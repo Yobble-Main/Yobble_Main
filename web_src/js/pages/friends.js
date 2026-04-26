@@ -1,4 +1,5 @@
 import { getCurrentUser } from "/js/auth-client.js";
+import { redirectToLogin } from "/js/auth.js";
 import { api } from "/js/api-pages/friends.js";
 import { mountTopbar, htmlEscape } from "/js/ui.js";
 /* --------------------------------
@@ -6,7 +7,7 @@ import { mountTopbar, htmlEscape } from "/js/ui.js";
 -------------------------------- */
 const user = await getCurrentUser();
 if (!user) {
-  location.href = "/login";
+  redirectToLogin("/friends");
   throw new Error("Not logged in");
 }
 await mountTopbar("friends");

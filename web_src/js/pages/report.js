@@ -2,7 +2,7 @@ import { requireLogin } from "../auth.js";
 import { mountShell, setContent } from "../nav.js";
 import { api, fmtError } from "../api-pages/report.js";
 
-requireLogin();
+await requireLogin();
 await mountShell("home");
 
 setContent(`
