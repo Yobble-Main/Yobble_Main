@@ -322,6 +322,21 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    private String escapeHtml(String value) {
+        return String.valueOf(value)
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
+    }
+
+    private String escapeJs(String value) {
+        return String.valueOf(value)
+                .replace("\\", "\\\\")
+                .replace("'", "\\'");
+    }
+
     private void showErrorPage(String title, String message, String retryUrl) {
         if (webView == null) return;
         String safeTitle = escapeHtml(title != null ? title : "Unable to load app");
