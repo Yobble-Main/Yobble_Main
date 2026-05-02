@@ -1,7 +1,15 @@
 import { applyTheme } from "../theme.js";
 import { api } from "../api-pages/play.js";
 import { requireAuth } from "../auth.js";
-await requireAuth();
+const offline = navigator.onLine === false;
+const hasAuthToken = !!localStorage.getItem("token");
+try {
+  await requireAuth();
+} catch (err) {
+  if (!offline && (!hasAuthToken || (err?.status === 401 || err?.status === 403))) {
+    throw err;
+  }
+}
 const q = new URLSearchParams(location.search);
 if (!q.get("project") && q.get("slug")) {
   q.set("project", q.get("slug"));

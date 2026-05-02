@@ -52,9 +52,10 @@ async function load(){
   }
   const gRes = await safeGet("/api/games/" + encodeURIComponent(project), null);
   if(!gRes){
+    const offline = navigator.onLine === false;
     heroMain.innerHTML = `
-      <h1>Game deleted</h1>
-      <p class="muted">This game is no longer available.</p>
+      <h1>${offline ? "You're offline" : "Game deleted"}</h1>
+      <p class="muted">${offline ? "The server could not be reached. If you have already launched this game in the desktop or mobile app, it can still open from the local offline cache." : "This game is no longer available."}</p>
     `;
     const unhideBtn = document.getElementById("unhideBtn");
     if (unhideBtn && ["admin","moderator"].includes(me?.role)) {

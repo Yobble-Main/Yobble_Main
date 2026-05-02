@@ -29,13 +29,24 @@ import androidx.core.app.ActivityCompat;
 import androidx.webkit.WebViewAssetLoader;
 
 import org.json.JSONTokener;
+import org.json.JSONObject;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.Locale;
+import java.util.Iterator;
 import java.util.HashMap;
 import java.util.Map;
 
 public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
+    private static final String BASE_URL = "http://photography-cage.gl.at.ply.gg:52426";
     private static final int REQUEST_FILE_CHOOSER = 1002;
     private static final int REQUEST_READ_STORAGE  = 1003;
 
@@ -45,6 +56,7 @@ public class MainActivity extends Activity {
     private String initialLocalStorageSnapshot;
     private boolean hasRestoredLocalStorage = false;
     private WebViewAssetLoader assetLoader;
+    private String currentTargetUrl;
 
     /** Holds the callback provided by WebView when a file-input is tapped. */
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -135,6 +147,36 @@ public class MainActivity extends Activity {
                     return;
                 }
                 exportLocalStorageSnapshot();
+                warmOfflineCopyIfNeeded(url);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, android.webkit.WebResourceError error) {
+                super.onReceivedError(view, request, error);
+                if (request == null || !request.isForMainFrame()) {
+                    return;
+                }
+                String target = request.getUrl() != null ? request.getUrl().toString() : currentTargetUrl;
+                if (tryLoadOfflineFallback(target)) {
+                    return;
+                }
+                showErrorPage("Yobble could not load",
+                        error != null ? String.valueOf(error.getDescription()) : "The app could not reach the server.",
+                        target);
+            }
+
+            @Override
+            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+                super.onReceivedHttpError(view, request, errorResponse);
+                if (request == null || !request.isForMainFrame()) {
+                    return;
+                }
+                String target = request.getUrl() != null ? request.getUrl().toString() : currentTargetUrl;
+                if (tryLoadOfflineFallback(target)) {
+                    return;
+                }
+                String message = "HTTP " + (errorResponse != null ? errorResponse.getStatusCode() : "error");
+                showErrorPage("Yobble could not load", message, target);
             }
         });
         webView.setWebChromeClient(new WebChromeClient() {
@@ -184,7 +226,7 @@ public class MainActivity extends Activity {
         });
 
         // ✅ Load game HTML
-        webView.loadUrl("http://photography-cage.gl.at.ply.gg:52426/");
+        loadAppUrl(BASE_URL + "/");
 
         // Enable Chrome remote debugging to inspect console/network in dev tools
         WebView.setWebContentsDebuggingEnabled(true);
@@ -258,6 +300,253 @@ public class MainActivity extends Activity {
             return true;
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    private void loadAppUrl(String url) {
+        currentTargetUrl = url;
+        if (webView == null) return;
+        webView.loadUrl(url);
+        warmOfflineCopyIfNeeded(url);
+    }
+
+    private boolean tryLoadOfflineFallback(String targetUrl) {
+        if (targetUrl == null || targetUrl.isEmpty()) {
+            return false;
+        }
+        String offlinePath = resolveOfflineEntryPath(targetUrl);
+        if (offlinePath == null) {
+            return false;
+        }
+        webView.post(() -> webView.loadUrl(Uri.fromFile(new File(offlinePath)).toString()));
+        return true;
+    }
+
+    private void showErrorPage(String title, String message, String retryUrl) {
+        if (webView == null) return;
+        String safeTitle = escapeHtml(title != null ? title : "Unable to load app");
+        String safeMessage = escapeHtml(message != null ? message : "Please check your connection and try again.");
+        String safeRetry = escapeJs(retryUrl != null ? retryUrl : BASE_URL + "/");
+        String safeHome = escapeHtml(BASE_URL + "/index");
+        String html = "<!doctype html><html><head><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<title>" + safeTitle + "</title>"
+                + "<style>"
+                + "html,body{margin:0;min-height:100%;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1020;color:#e5e7eb}"
+                + "main{min-height:100vh;display:grid;place-items:center;padding:24px}"
+                + ".card{max-width:720px;width:100%;background:rgba(15,23,42,.92);border:1px solid rgba(148,163,184,.2);border-radius:20px;padding:24px;box-shadow:0 24px 80px rgba(0,0,0,.35)}"
+                + "h1{margin:0 0 10px;font-size:28px}p{margin:0 0 16px;line-height:1.5;color:#cbd5e1}"
+                + ".actions{display:flex;gap:10px;flex-wrap:wrap}button,a{border:1px solid rgba(148,163,184,.24);background:#0f172a;color:#f8fafc;border-radius:12px;padding:10px 14px;font:inherit;cursor:pointer;text-decoration:none}"
+                + ".primary{background:#2563eb;border-color:#2563eb}"
+                + "</style></head><body><main><section class=\"card\"><h1>" + safeTitle + "</h1><p>" + safeMessage + "</p>"
+                + "<div class=\"actions\"><button class=\"primary\" onclick=\"location.href='" + safeRetry + "'\">Retry</button>"
+                + "<a href='" + safeHome + "'>Home</a></div></section></main></body></html>";
+        webView.loadDataWithBaseURL(BASE_URL, html, "text/html", "UTF-8", null);
+    }
+
+    private void warmOfflineCopyIfNeeded(String targetUrl) {
+        Uri uri = Uri.parse(targetUrl);
+        String project = uri.getQueryParameter("project");
+        String version = uri.getQueryParameter("version");
+        if (project == null || version == null) {
+            return;
+        }
+        String entry = uri.getQueryParameter("entry");
+        if (resolveOfflineEntryPath(project, version, entry) != null) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                downloadOfflineGame(project, version);
+            } catch (Exception e) {
+                Log.d(TAG, "Offline cache warm-up failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    private File getOfflineRoot() {
+        File root = new File(getFilesDir(), "offline-games");
+        if (!root.exists()) {
+            root.mkdirs();
+        }
+        return root;
+    }
+
+    private String safeSegment(String value) {
+        if (value == null) return "unknown";
+        String cleaned = value.trim().replaceAll("[^a-zA-Z0-9._-]+", "_");
+        return cleaned.isEmpty() ? "unknown" : cleaned;
+    }
+
+    private File getOfflineVersionDir(String project, String version) {
+        return new File(new File(getOfflineRoot(), safeSegment(project)), safeSegment(version));
+    }
+
+    private File getOfflineMarkerFile(String project, String version) {
+        return new File(getOfflineVersionDir(project, version), ".complete");
+    }
+
+    private String normalizeEntry(String entry) {
+        if (entry == null || entry.trim().isEmpty()) {
+            return "index";
+        }
+        return entry.trim().replaceFirst("^/+", "");
+    }
+
+    private String resolveOfflineEntryPath(String project, String version, String entry) {
+        File versionDir = getOfflineVersionDir(project, version);
+        File marker = getOfflineMarkerFile(project, version);
+        if (!marker.exists()) {
+            return null;
+        }
+        String normalized = normalizeEntry(entry);
+        String[] candidates = new String[] {
+                normalized,
+                normalized.endsWith(".html") ? normalized : normalized + ".html",
+                normalized + "/index.html"
+        };
+        for (String candidate : candidates) {
+            File file = new File(versionDir, candidate);
+            try {
+                String resolved = file.getCanonicalPath();
+                String root = versionDir.getCanonicalPath();
+                if (!resolved.startsWith(root)) {
+                    continue;
+                }
+                if (file.exists() && file.isFile()) {
+                    return file.getAbsolutePath();
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return null;
+    }
+
+    private String resolveOfflineEntryPath(String targetUrl) {
+        try {
+            Uri uri = Uri.parse(targetUrl);
+            String project = uri.getQueryParameter("project");
+            String version = uri.getQueryParameter("version");
+            String entry = uri.getQueryParameter("entry");
+            if (project == null || version == null) return null;
+            return resolveOfflineEntryPath(project, version, entry);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void downloadOfflineGame(String project, String version) throws Exception {
+        File versionDir = getOfflineVersionDir(project, version);
+        if (!versionDir.exists() && !versionDir.mkdirs()) {
+            throw new IllegalStateException("Unable to create offline cache directory");
+        }
+        String manifestUrl = BASE_URL + "/games/"
+                + Uri.encode(project) + "/" + Uri.encode(version) + "/assets.json";
+        JSONObject manifest = fetchJson(manifestUrl);
+        JSONObject versionFiles = manifest.optJSONObject(version);
+        if (versionFiles == null) {
+            return;
+        }
+        Iterator<String> keys = versionFiles.keys();
+        while (keys.hasNext()) {
+            String relPath = keys.next();
+            File target = new File(versionDir, relPath);
+            String resolvedTarget = target.getCanonicalPath();
+            String root = versionDir.getCanonicalPath();
+            if (!resolvedTarget.startsWith(root)) {
+                continue;
+            }
+            File parent = target.getParentFile();
+            if (parent != null && !parent.exists()) {
+                parent.mkdirs();
+            }
+            StringBuilder fileUrl = new StringBuilder(BASE_URL)
+                    .append("/games/")
+                    .append(Uri.encode(project))
+                    .append("/")
+                    .append(Uri.encode(version))
+                    .append("/");
+            String[] parts = relPath.split("/");
+            boolean first = true;
+            for (String part : parts) {
+                if (part == null || part.isEmpty()) continue;
+                if (!first) {
+                    fileUrl.append("/");
+                }
+                fileUrl.append(Uri.encode(part));
+                first = false;
+            }
+            downloadFile(fileUrl.toString(), target);
+        }
+        File marker = getOfflineMarkerFile(project, version);
+        File markerParent = marker.getParentFile();
+        if (markerParent != null && !markerParent.exists()) {
+            markerParent.mkdirs();
+        }
+        try (FileOutputStream out = new FileOutputStream(marker, false)) {
+            out.write(String.valueOf(System.currentTimeMillis()).getBytes());
+            out.flush();
+        }
+    }
+
+    private JSONObject fetchJson(String urlString) throws Exception {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(urlString);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(20000);
+            connection.setUseCaches(false);
+            connection.connect();
+            int code = connection.getResponseCode();
+            InputStream stream = code >= 200 && code < 300 ? connection.getInputStream() : connection.getErrorStream();
+            if (stream == null) {
+                throw new IllegalStateException("Empty response");
+            }
+            try (BufferedInputStream in = new BufferedInputStream(stream);
+                 ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException("HTTP " + code + ": " + out.toString());
+                }
+                return new JSONObject(out.toString());
+            }
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+    }
+
+    private void downloadFile(String urlString, File target) throws Exception {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(urlString);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(15000);
+            connection.setReadTimeout(20000);
+            connection.setUseCaches(false);
+            connection.connect();
+            int code = connection.getResponseCode();
+            if (code < 200 || code >= 300) {
+                throw new IllegalStateException("HTTP " + code);
+            }
+            try (InputStream stream = connection.getInputStream();
+                 BufferedInputStream in = new BufferedInputStream(stream);
+                 BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(target, false))) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                out.flush();
+            }
+        } finally {
+            if (connection != null) connection.disconnect();
         }
     }
 
